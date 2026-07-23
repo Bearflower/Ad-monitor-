@@ -20,6 +20,7 @@ class PlatformSummary:
 @dataclass(frozen=True)
 class SkuPerformance:
     platform: str
+    store: str
     sku_id: str
     campaign_id: str
     roas: Decimal | None
@@ -82,7 +83,7 @@ class ReportReadModel:
                 )
             sku_rows = connection.execute(
                 """
-                SELECT m.platform, m.sku_id, m.campaign_id, m.roas,
+                SELECT m.platform, m.store, m.sku_id, m.campaign_id, m.roas,
                        p.net_profit_cny
                 FROM daily_ad_metrics m
                 LEFT JOIN profit_results p
@@ -124,6 +125,7 @@ class ReportReadModel:
             sku_performance=tuple(
                 SkuPerformance(
                     platform=row["platform"],
+                    store=row["store"],
                     sku_id=row["sku_id"],
                     campaign_id=row["campaign_id"],
                     roas=None if row["roas"] is None else Decimal(row["roas"]),

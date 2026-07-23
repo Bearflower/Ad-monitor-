@@ -6,6 +6,7 @@ from adwatch.collectors.mock import MockCollector
 from adwatch.collectors.ziniao import ZiniaoCollector, ZiniaoNotConfigured
 from adwatch.config import Settings
 from adwatch.domain import Platform
+from adwatch.dashboard.app import serve
 from adwatch.pipeline.runner import PipelineRunner
 from adwatch.reporting.delivery import deliver_report
 from adwatch.reporting.markdown import render_daily_markdown
@@ -33,6 +34,11 @@ def build_parser() -> argparse.ArgumentParser:
     daily.add_argument("--date", type=date.fromisoformat, default=date.today())
     schedule = subcommands.add_parser("schedule")
     schedule.add_argument("--print-launchd", action="store_true")
+    dashboard = subcommands.add_parser("dashboard")
+    dashboard.add_argument("--host", default="127.0.0.1")
+    dashboard.add_argument("--port", type=int, default=8765)
+    dashboard.add_argument("--date", type=date.fromisoformat, default=date.today())
+    dashboard.add_argument("--allow-remote", action="store_true")
     return parser
 
 
@@ -86,6 +92,20 @@ def main(argv: list[str] | None = None) -> int:
                 "<key>Minute</key><integer>0</integer>"
                 "</dict></dict></plist>"
             )
+        return 0
+    if args.command == "dashboard":
+        if args.host not in {"127.0.0.1", "localhost", "::1"} and not args.allow_remote:
+            print("Remote dashboard binding requires --allow-remote")
+            return 2
+        database.migrate()
+        print(f"Dashboard: http://{args.host}:{args.port}")
+        serve(
+            database,
+            host=args.host,
+            port=args.port,
+            default_date=args.date,
+            simulated=True,
+        )
         return 0
     if args.command == "run" and args.workflow == "daily":
         database.migrate()
