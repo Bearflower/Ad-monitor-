@@ -1,6 +1,7 @@
 import argparse
 from datetime import date
 
+from adwatch.analytics.service import AnalysisService
 from adwatch.collectors.mock import MockCollector
 from adwatch.collectors.ziniao import ZiniaoCollector, ZiniaoNotConfigured
 from adwatch.config import Settings
@@ -18,6 +19,10 @@ def build_parser() -> argparse.ArgumentParser:
     collect.add_argument("--mode", choices=("mock", "ziniao"), default="mock")
     collect.add_argument("--date", type=date.fromisoformat, default=date.today())
     subcommands.add_parser("doctor")
+    seed = subcommands.add_parser("seed-business-data")
+    seed.add_argument("--date", type=date.fromisoformat, default=date.today())
+    analyze = subcommands.add_parser("analyze")
+    analyze.add_argument("--date", type=date.fromisoformat, default=date.today())
     return parser
 
 
@@ -40,6 +45,22 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "doctor":
         print(f"SQLite: {settings.database_path}")
         print(f"Ziniao configured: {'yes' if settings.ziniao_ready else 'no'}")
+        return 0
+    if args.command == "seed-business-data":
+        database.migrate()
+        count = AnalysisService(database).seed_mock_business_data(args.date)
+        print(f"Seeded business inputs for {count} metric rows")
+        return 0
+    if args.command == "analyze":
+        database.migrate()
+        summary = AnalysisService(database).run(args.date)
+        print(
+            f"metrics={summary.metrics_processed} "
+            f"profit_results={summary.profit_results} "
+            f"alerts={summary.alerts} "
+            f"recommendations={summary.recommendations} "
+            f"circuit_open={str(summary.circuit_open).lower()}"
+        )
         return 0
     if args.command == "collect":
         database.migrate()
