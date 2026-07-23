@@ -23,8 +23,8 @@ where = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+addopts = ["--import-mode=importlib"]
 
 [tool.ruff]
 line-length = 88
 target-version = "py311"
-

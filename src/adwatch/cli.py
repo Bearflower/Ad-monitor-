@@ -4,6 +4,7 @@ from datetime import date
 from adwatch.analytics.service import AnalysisService
 from adwatch.collectors.mock import MockCollector
 from adwatch.collectors.ziniao import ZiniaoCollector, ZiniaoNotConfigured
+from adwatch.collectors.ziniao_client import ZiniaoApiError, ZiniaoClient
 from adwatch.config import Settings
 from adwatch.domain import Platform
 from adwatch.dashboard.app import serve
@@ -61,6 +62,16 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "doctor":
         print(f"SQLite: {settings.database_path}")
         print(f"Ziniao configured: {'yes' if settings.ziniao_ready else 'no'}")
+        if settings.ziniao_ready:
+            try:
+                stores = ZiniaoClient(settings).get_browser_list()
+                print(f"Ziniao endpoint: reachable ({len(stores)} stores)")
+            except (OSError, ZiniaoApiError) as error:
+                print(
+                    f"Ziniao endpoint: unavailable "
+                    f"({type(error).__name__}: {error})"
+                )
+                return 2
         return 0
     if args.command == "seed-business-data":
         database.migrate()
