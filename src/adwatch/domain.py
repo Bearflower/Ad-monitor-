@@ -59,3 +59,7 @@ class ValidationIssue:
 class ValidatedMetric:
     metric: DailyAdMetric
     issues: tuple[ValidationIssue, ...]
+
+    @property
+    def is_valid(self) -> bool:
+        return not any(issue.severity == "error" for issue in self.issues)
