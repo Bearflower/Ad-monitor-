@@ -203,4 +203,37 @@ MIGRATIONS = [
             ('global_roas_circuit_ratio', '0.60');
         """,
     ),
+    (
+        3,
+        """
+        CREATE TABLE approvals (
+            id TEXT PRIMARY KEY,
+            recommendation_id INTEGER NOT NULL UNIQUE
+                REFERENCES recommendations(id),
+            status TEXT NOT NULL,
+            requested_at TEXT NOT NULL,
+            expires_at TEXT NOT NULL,
+            decided_at TEXT,
+            decided_by TEXT,
+            decision_token_hash TEXT NOT NULL,
+            decision_reason TEXT
+        );
+
+        CREATE TABLE execution_audits (
+            id TEXT PRIMARY KEY,
+            approval_id TEXT NOT NULL REFERENCES approvals(id),
+            action TEXT NOT NULL,
+            before_json TEXT,
+            after_json TEXT,
+            before_screenshot TEXT,
+            after_screenshot TEXT,
+            status TEXT NOT NULL,
+            error_code TEXT,
+            error_message TEXT,
+            idempotency_key TEXT NOT NULL UNIQUE,
+            created_at TEXT NOT NULL,
+            finished_at TEXT
+        );
+        """,
+    ),
 ]
