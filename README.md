@@ -57,6 +57,27 @@ python -m adwatch run daily --mode mock --date 2026-07-22
 
 该命令依次完成采集、质量校验、经营数据模拟补齐、利润分析、策略建议、日报和飞书投递；未配置飞书时自动保存本地 Markdown。
 
+## 补齐真实经营参数
+
+真实模式不会猜测成本、库存、汇率或目标值。先根据已经采集的广告记录导出 CSV：
+
+```bash
+.venv/bin/adwatch business export-template \
+  --from 2026-07-21 \
+  --to 2026-07-23 \
+  --output var/business-inputs-2026-07-21_2026-07-23.csv
+```
+
+填写所有空白列后导入，并重新分析：
+
+```bash
+.venv/bin/adwatch business import \
+  --file var/business-inputs-2026-07-21_2026-07-23.csv
+.venv/bin/adwatch analyze --date 2026-07-23
+```
+
+CSV 会整批校验；任意一行缺值或格式错误时，不会写入任何一行。目前 Shopee 采集结果的 `sku_id` 是 `__ALL__`，代表 Campaign 当日汇总，因此 `product_cost`、运费、优惠、固定成本和退款应填写该 Campaign 当日总额；`commission_rate` 填小数，例如 8% 填 `0.08`。`rate_to_cny` 表示 1 单位广告币种折合多少人民币。
+
 ## 本地看板
 
 ```bash

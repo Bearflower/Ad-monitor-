@@ -4,6 +4,11 @@ from datetime import date, timedelta
 from html import escape
 from pathlib import Path
 
+from adwatch.analytics.business_inputs import (
+    BusinessInputError,
+    export_business_template,
+    import_business_inputs,
+)
 from adwatch.analytics.service import AnalysisService
 from adwatch.collectors.mock import MockCollector
 from adwatch.collectors.ziniao import ZiniaoCollector, ZiniaoNotConfigured
@@ -35,6 +40,18 @@ def build_parser() -> argparse.ArgumentParser:
     seed.add_argument("--date", type=date.fromisoformat, default=date.today())
     analyze = subcommands.add_parser("analyze")
     analyze.add_argument("--date", type=date.fromisoformat, default=date.today())
+    business = subcommands.add_parser("business")
+    business_commands = business.add_subparsers(dest="business_command")
+    export_template = business_commands.add_parser("export-template")
+    export_template.add_argument(
+        "--from", dest="start", type=date.fromisoformat, required=True
+    )
+    export_template.add_argument(
+        "--to", dest="end", type=date.fromisoformat, required=True
+    )
+    export_template.add_argument("--output", type=Path, required=True)
+    import_inputs = business_commands.add_parser("import")
+    import_inputs.add_argument("--file", type=Path, required=True)
     run = subcommands.add_parser("run")
     workflows = run.add_subparsers(dest="workflow")
     daily = workflows.add_parser("daily")
@@ -111,6 +128,27 @@ def main(argv: list[str] | None = None) -> int:
             f"circuit_open={str(summary.circuit_open).lower()}"
         )
         return 0
+    if args.command == "business":
+        database.migrate()
+        try:
+            if args.business_command == "export-template":
+                count = export_business_template(
+                    database,
+                    start=args.start,
+                    end=args.end,
+                    destination=args.output,
+                )
+                print(f"Exported {count} business input rows: {args.output}")
+                return 0
+            if args.business_command == "import":
+                count = import_business_inputs(database, args.file)
+                print(f"Imported {count} business input rows")
+                return 0
+        except BusinessInputError as error:
+            print(f"Business input rejected: {error}")
+            return 2
+        parser.print_help()
+        return 2
     if args.command == "schedule":
         if args.print_launchd:
             print(render_launchd_plist(Path.cwd()))
