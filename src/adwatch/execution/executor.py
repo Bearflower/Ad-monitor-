@@ -4,6 +4,7 @@ import json
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from decimal import Decimal
 from typing import Protocol
 
 from adwatch.storage.db import Database
@@ -66,10 +67,19 @@ class SafeExecutor:
             ).fetchone()
         if row is None or row["approval_status"] != "approved":
             raise ExecutionError("approval is not approved")
+        if datetime.fromisoformat(row["expires_at"]) <= datetime.now(
+            timezone.utc
+        ):
+            raise ExecutionError("approval has expired")
         if circuit and circuit["is_open"]:
             raise ExecutionError("write circuit is open")
         if row["action"] in self.BLOCKED_ACTIONS:
             raise ExecutionError("action is permanently blocked")
+        if (
+            row["action"] == "increase_budget"
+            and Decimal(row["change_ratio"] or "0") > Decimal("0.50")
+        ):
+            raise ExecutionError("budget increase above 50% is blocked")
         recommendation = dict(row)
         current = self.backend.read_current(recommendation)
         if current != expected_before:

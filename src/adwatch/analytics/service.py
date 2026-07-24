@@ -35,6 +35,14 @@ class AnalysisService:
         alert_count = 0
         recommendation_count = 0
         with self.database.transaction() as connection:
+            connection.execute(
+                "DELETE FROM profit_results WHERE data_date=?",
+                (data_date.isoformat(),),
+            )
+            connection.execute(
+                "DELETE FROM alerts WHERE data_date=?",
+                (data_date.isoformat(),),
+            )
             for row in rows:
                 required = (
                     "product_cost",

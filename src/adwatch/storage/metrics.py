@@ -6,6 +6,18 @@ from adwatch.domain import DailyAdMetric
 
 class MetricRepository:
     @staticmethod
+    def delete_platform_day(
+        connection: sqlite3.Connection, platform: str, data_date: str
+    ) -> None:
+        connection.execute(
+            """
+            DELETE FROM daily_ad_metrics
+            WHERE platform=? AND data_date=?
+            """,
+            (platform, data_date),
+        )
+
+    @staticmethod
     def upsert_many(
         connection: sqlite3.Connection, metrics: Iterable[DailyAdMetric]
     ) -> int:

@@ -27,3 +27,27 @@ def test_analysis_is_idempotent_for_one_date(tmp_path):
             "SELECT COUNT(*) FROM profit_results WHERE data_date='2026-07-22'"
         ).fetchone()[0]
     assert count == 8
+
+
+def test_analysis_rebuilds_alerts_after_snapshot_replacement(tmp_path):
+    data_date = date(2026, 7, 23)
+    database = Database(tmp_path / "test.sqlite3")
+    database.migrate()
+    runner = PipelineRunner(database)
+    service = AnalysisService(database)
+
+    runner.run(MockCollector(Platform.SHOPEE), data_date)
+    service.run(data_date)
+
+    class OneMetricCollector(MockCollector):
+        def collect(self, day):
+            return super().collect(day)[:1]
+
+    runner.run(OneMetricCollector(Platform.SHOPEE), data_date)
+    service.run(data_date)
+
+    with database.connect() as connection:
+        alerts = connection.execute(
+            "SELECT COUNT(*) FROM alerts WHERE data_date='2026-07-23'"
+        ).fetchone()[0]
+    assert alerts == 1

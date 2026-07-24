@@ -1,13 +1,20 @@
 import argparse
-from datetime import date
+import shutil
+from datetime import date, timedelta
+from html import escape
+from pathlib import Path
 
 from adwatch.analytics.service import AnalysisService
 from adwatch.collectors.mock import MockCollector
 from adwatch.collectors.ziniao import ZiniaoCollector, ZiniaoNotConfigured
-from adwatch.collectors.ziniao_client import ZiniaoApiError, ZiniaoClient
+from adwatch.collectors.ziniao_client import (
+    ZiniaoApiError,
+    ZiniaoCliClient,
+    ZiniaoClient,
+)
 from adwatch.config import Settings
-from adwatch.domain import Platform
 from adwatch.dashboard.app import serve
+from adwatch.domain import Platform
 from adwatch.pipeline.runner import PipelineRunner
 from adwatch.reporting.delivery import deliver_report
 from adwatch.reporting.markdown import render_daily_markdown
@@ -32,7 +39,11 @@ def build_parser() -> argparse.ArgumentParser:
     workflows = run.add_subparsers(dest="workflow")
     daily = workflows.add_parser("daily")
     daily.add_argument("--mode", choices=("mock", "ziniao"), default="mock")
-    daily.add_argument("--date", type=date.fromisoformat, default=date.today())
+    daily.add_argument(
+        "--date",
+        type=date.fromisoformat,
+        default=date.today() - timedelta(days=1),
+    )
     schedule = subcommands.add_parser("schedule")
     schedule.add_argument("--print-launchd", action="store_true")
     dashboard = subcommands.add_parser("dashboard")
@@ -61,6 +72,17 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.command == "doctor":
         print(f"SQLite: {settings.database_path}")
+        if shutil.which("ziniao-cli"):
+            try:
+                stores = ZiniaoCliClient().get_store_list()
+                print(f"Ziniao CLI: reachable ({len(stores)} stores)")
+                return 0
+            except (OSError, ZiniaoApiError) as error:
+                print(
+                    f"Ziniao CLI: unavailable "
+                    f"({type(error).__name__}: {error})"
+                )
+                return 2
         print(f"Ziniao configured: {'yes' if settings.ziniao_ready else 'no'}")
         if settings.ziniao_ready:
             try:
@@ -91,18 +113,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.command == "schedule":
         if args.print_launchd:
-            print(
-                "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
-                "<plist version=\"1.0\"><dict>"
-                "<key>Label</key><string>com.adwatch.daily</string>"
-                "<key>ProgramArguments</key><array>"
-                "<string>adwatch</string><string>run</string>"
-                "<string>daily</string></array>"
-                "<key>StartCalendarInterval</key><dict>"
-                "<key>Hour</key><integer>8</integer>"
-                "<key>Minute</key><integer>0</integer>"
-                "</dict></dict></plist>"
-            )
+            print(render_launchd_plist(Path.cwd()))
         return 0
     if args.command == "dashboard":
         if args.host not in {"127.0.0.1", "localhost", "::1"} and not args.allow_remote:
@@ -120,22 +131,41 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.command == "run" and args.workflow == "daily":
         database.migrate()
-        if args.mode != "mock":
-            print("Daily Ziniao run requires the real collector integration")
+        if args.mode == "ziniao" and not settings.ziniao_cli_ready:
+            print(
+                "Ziniao store IDs are not configured. Set "
+                "ZINIAO_TIKTOK_STORE_ID and ZINIAO_SHOPEE_STORE_ID."
+            )
             return 2
+        collector_type = (
+            MockCollector if args.mode == "mock" else ZiniaoCollector
+        )
         runner = PipelineRunner(database)
-        summaries = [
-            runner.run(MockCollector(platform), args.date)
-            for platform in (Platform.TIKTOK, Platform.SHOPEE)
-        ]
+        try:
+            summaries = [
+                runner.run(
+                    (
+                        collector_type(platform)
+                        if args.mode == "mock"
+                        else collector_type(settings, platform)
+                    ),
+                    args.date,
+                )
+                for platform in (Platform.TIKTOK, Platform.SHOPEE)
+            ]
+        except ZiniaoNotConfigured as error:
+            print(str(error))
+            return 2
         write_quality_report(
             settings.report_dir, args.date, args.mode, summaries
         )
         analysis = AnalysisService(database)
-        analysis.seed_mock_business_data(args.date)
+        if args.mode == "mock":
+            analysis.seed_mock_business_data(args.date)
         analysis_summary = analysis.run(args.date)
         markdown = render_daily_markdown(
-            ReportReadModel(database).daily(args.date), simulated=True
+            ReportReadModel(database).daily(args.date),
+            simulated=args.mode == "mock",
         )
         delivery = deliver_report(
             markdown,
@@ -157,10 +187,10 @@ def main(argv: list[str] | None = None) -> int:
                 MockCollector(Platform.SHOPEE),
             ]
         else:
-            if not settings.ziniao_ready:
+            if not settings.ziniao_cli_ready:
                 print(
-                    "Ziniao is not configured. Set ZINIAO_COMPANY, "
-                    "ZINIAO_USERNAME, ZINIAO_PASSWORD and ZINIAO_ENDPOINT."
+                    "Ziniao store IDs are not configured. Set "
+                    "ZINIAO_TIKTOK_STORE_ID and ZINIAO_SHOPEE_STORE_ID."
                 )
                 return 2
             collectors = [
@@ -194,3 +224,32 @@ def main(argv: list[str] | None = None) -> int:
 
 def entrypoint() -> None:
     raise SystemExit(main())
+
+
+def render_launchd_plist(project_dir: Path) -> str:
+    executable = project_dir / ".venv" / "bin" / "adwatch"
+    stdout = project_dir / "var" / "logs" / "launchd.out.log"
+    stderr = project_dir / "var" / "logs" / "launchd.err.log"
+    return (
+        '<?xml version="1.0" encoding="UTF-8"?>\n'
+        '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" '
+        '"http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n'
+        '<plist version="1.0"><dict>'
+        "<key>Label</key><string>com.adwatch.daily</string>"
+        "<key>ProgramArguments</key><array>"
+        f"<string>{escape(str(executable))}</string>"
+        "<string>run</string><string>daily</string>"
+        "<string>--mode</string><string>ziniao</string></array>"
+        f"<key>WorkingDirectory</key><string>{escape(str(project_dir))}</string>"
+        "<key>EnvironmentVariables</key><dict>"
+        "<key>PATH</key>"
+        "<string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>"
+        "</dict>"
+        f"<key>StandardOutPath</key><string>{escape(str(stdout))}</string>"
+        f"<key>StandardErrorPath</key><string>{escape(str(stderr))}</string>"
+        "<key>StartCalendarInterval</key><dict>"
+        "<key>Hour</key><integer>9</integer>"
+        "<key>Minute</key><integer>0</integer>"
+        "</dict><key>RunAtLoad</key><false/>"
+        "</dict></plist>"
+    )

@@ -1,3 +1,5 @@
+from datetime import datetime, timedelta, timezone
+
 import pytest
 
 from adwatch.approval.service import ApprovalService
@@ -69,4 +71,47 @@ def test_executor_rejects_state_drift(tmp_path):
             _approved(database),
             idempotency_key="operation-2",
             expected_before={"budget": "90"},
+        )
+
+
+def test_executor_rejects_expired_approval(tmp_path):
+    database = Database(tmp_path / "test.sqlite3")
+    database.migrate()
+    approval_id = _approved(database)
+    expired = (datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat()
+    with database.transaction() as connection:
+        connection.execute(
+            "UPDATE approvals SET expires_at=? WHERE id=?",
+            (expired, approval_id),
+        )
+
+    with pytest.raises(ExecutionError, match="expired"):
+        SafeExecutor(database, FakeBackend()).execute(
+            approval_id,
+            idempotency_key="expired-operation",
+            expected_before={"budget": "100"},
+        )
+
+
+def test_executor_permanently_blocks_budget_increase_above_fifty_percent(
+    tmp_path,
+):
+    database = Database(tmp_path / "test.sqlite3")
+    database.migrate()
+    approval_id = _approved(database)
+    with database.transaction() as connection:
+        connection.execute(
+            """
+            UPDATE recommendations
+            SET action='increase_budget', change_ratio='0.60'
+            WHERE id=(SELECT recommendation_id FROM approvals WHERE id=?)
+            """,
+            (approval_id,),
+        )
+
+    with pytest.raises(ExecutionError, match="above 50%"):
+        SafeExecutor(database, FakeBackend()).execute(
+            approval_id,
+            idempotency_key="large-increase",
+            expected_before={"budget": "100"},
         )

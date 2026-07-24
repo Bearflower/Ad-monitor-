@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import json
+import subprocess
+import time
 import urllib.request
 import uuid
+from collections.abc import Callable
 from typing import Protocol
 
 from adwatch.config import Settings
@@ -10,6 +13,105 @@ from adwatch.config import Settings
 
 class ZiniaoApiError(RuntimeError):
     pass
+
+
+class ZiniaoCliClient:
+    def __init__(
+        self,
+        *,
+        executable: str = "ziniao-cli",
+        runner: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
+        sleeper: Callable[[float], None] = time.sleep,
+    ) -> None:
+        self.executable = executable
+        self.runner = runner
+        self.sleeper = sleeper
+
+    def get_store_list(self) -> list[dict]:
+        response = self._run("store", "list", "--format", "json")
+        return list(response.get("data", []))
+
+    def page_exec(self, store_id: str, script: str) -> object:
+        response = self._run(
+            "page",
+            "exec",
+            "--store-id",
+            store_id,
+            "--script",
+            script,
+        )
+        result = response.get("data", {}).get("data", {}).get("result")
+        if isinstance(result, str):
+            try:
+                return json.loads(result)
+            except json.JSONDecodeError:
+                return result
+        return result
+
+    def navigate_and_exec(
+        self,
+        store_id: str,
+        url: str,
+        script: str,
+        *,
+        expected_url: str,
+        require_nonempty: bool = False,
+        attempts: int = 15,
+    ) -> object:
+        target = json.dumps(url)
+        self.page_exec(store_id, f'location.href={target}; "navigating"')
+        for attempt in range(attempts):
+            current_url = self.page_exec(store_id, "location.href")
+            if expected_url in str(current_url):
+                result = self.page_exec(store_id, script)
+                if not require_nonempty or result:
+                    return result
+            if attempt + 1 < attempts:
+                self.sleeper(1)
+        raise ZiniaoApiError(
+            f"Page did not reach expected URL or data after {attempts} attempts: "
+            f"{expected_url}"
+        )
+
+    def page_exec_until(
+        self,
+        store_id: str,
+        script: str,
+        *,
+        ready: Callable[[object], bool],
+        attempts: int = 15,
+    ) -> object:
+        for attempt in range(attempts):
+            result = self.page_exec(store_id, script)
+            if ready(result):
+                return result
+            if attempt + 1 < attempts:
+                self.sleeper(1)
+        raise ZiniaoApiError(
+            f"Page data was not ready after {attempts} attempts"
+        )
+
+    def _run(self, *arguments: str) -> dict[str, object]:
+        command = [self.executable, *arguments]
+        completed = self.runner(
+            command,
+            capture_output=True,
+            text=True,
+            timeout=120,
+            check=False,
+        )
+        if completed.returncode:
+            message = completed.stderr.strip() or completed.stdout.strip()
+            raise ZiniaoApiError(message or f"Command failed: {command[1]}")
+        try:
+            response = json.loads(completed.stdout)
+        except json.JSONDecodeError as error:
+            raise ZiniaoApiError("Ziniao CLI returned invalid JSON") from error
+        if not response.get("ok", False):
+            error = response.get("error", {})
+            message = error.get("message") if isinstance(error, dict) else error
+            raise ZiniaoApiError(str(message or "Ziniao CLI request failed"))
+        return response
 
 
 class HttpTransport(Protocol):

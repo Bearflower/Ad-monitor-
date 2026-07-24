@@ -31,6 +31,11 @@ class PipelineRunner:
             valid = [result for result in validated if result.is_valid]
             invalid = [result for result in validated if not result.is_valid]
             with self.database.transaction() as connection:
+                MetricRepository.delete_platform_day(
+                    connection,
+                    collector.platform.value,
+                    data_date.isoformat(),
+                )
                 accepted = MetricRepository.upsert_many(
                     connection, [result.metric for result in valid]
                 )
