@@ -47,6 +47,17 @@ class OrderImportSummary:
     total_cost_cny: Decimal
 
 
+@dataclass(frozen=True)
+class OrderCostSummary:
+    order_date: date
+    platform: str
+    store: str
+    canonical_store: str
+    orders: int
+    units: int
+    total_cost_cny: Decimal
+
+
 def import_order_costs(database: Database, source: Path) -> OrderImportSummary:
     raw = _raw_rows(source)
     if not raw:
@@ -118,6 +129,89 @@ def import_order_costs(database: Database, source: Path) -> OrderImportSummary:
         start=min(dates),
         end=max(dates),
         total_cost_cny=total.quantize(CENT),
+    )
+
+
+def map_store(
+    database: Database,
+    platform: str,
+    source_store: str,
+    canonical_store: str,
+) -> None:
+    normalized = platform.strip().lower()
+    source = source_store.strip()
+    target = canonical_store.strip()
+    if normalized not in PLATFORMS or not source or not target:
+        raise BusinessInputError("invalid store mapping")
+    with database.transaction() as connection:
+        collected = connection.execute(
+            """
+            SELECT 1 FROM daily_ad_metrics
+            WHERE platform=? AND store=? LIMIT 1
+            """,
+            (normalized, target),
+        ).fetchone()
+        if collected is None:
+            raise BusinessInputError(
+                f"unknown collected store: {normalized}/{target}"
+            )
+        connection.execute(
+            """
+            INSERT INTO store_aliases(
+                platform, source_store, canonical_store
+            ) VALUES (?, ?, ?)
+            ON CONFLICT(platform, source_store) DO UPDATE SET
+                canonical_store=excluded.canonical_store
+            """,
+            (normalized, source, target),
+        )
+
+
+def order_cost_summary(
+    database: Database,
+    start: date,
+    end: date,
+) -> tuple[OrderCostSummary, ...]:
+    if start > end:
+        raise BusinessInputError("summary start date must not exceed end date")
+    with database.connect() as connection:
+        rows = connection.execute(
+            """
+            SELECT
+                line.order_date,
+                line.platform,
+                line.store,
+                COALESCE(alias.canonical_store, line.store)
+                    AS canonical_store,
+                COUNT(DISTINCT line.order_id) AS orders,
+                SUM(line.quantity) AS units,
+                SUM(CAST(line.line_cost_cny AS NUMERIC))
+                    AS total_cost_cny
+            FROM order_cost_lines AS line
+            LEFT JOIN store_aliases AS alias
+              ON alias.platform=line.platform
+             AND alias.source_store=line.store
+            WHERE line.order_date BETWEEN ? AND ?
+            GROUP BY
+                line.order_date, line.platform, line.store,
+                canonical_store
+            ORDER BY line.order_date, line.platform, line.store
+            """,
+            (start.isoformat(), end.isoformat()),
+        ).fetchall()
+    return tuple(
+        OrderCostSummary(
+            order_date=date.fromisoformat(row["order_date"]),
+            platform=row["platform"],
+            store=row["store"],
+            canonical_store=row["canonical_store"],
+            orders=int(row["orders"]),
+            units=int(row["units"]),
+            total_cost_cny=Decimal(
+                str(row["total_cost_cny"])
+            ).quantize(CENT),
+        )
+        for row in rows
     )
 
 

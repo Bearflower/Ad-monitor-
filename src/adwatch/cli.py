@@ -12,6 +12,11 @@ from adwatch.analytics.business_inputs import (
     import_business_inputs,
     import_minimal_business_inputs,
 )
+from adwatch.analytics.order_costs import (
+    import_order_costs,
+    map_store,
+    order_cost_summary,
+)
 from adwatch.analytics.service import AnalysisService
 from adwatch.approval.server import serve_callback
 from adwatch.collectors.mock import MockCollector
@@ -130,6 +135,19 @@ def build_parser() -> argparse.ArgumentParser:
     import_inputs.add_argument("--file", type=Path, required=True)
     import_minimal = business_commands.add_parser("import-minimal")
     import_minimal.add_argument("--file", type=Path, required=True)
+    import_orders = business_commands.add_parser("import-orders")
+    import_orders.add_argument("--file", type=Path, required=True)
+    map_store_command = business_commands.add_parser("map-store")
+    map_store_command.add_argument("--platform", required=True)
+    map_store_command.add_argument("--source", required=True)
+    map_store_command.add_argument("--target", required=True)
+    order_summary = business_commands.add_parser("order-summary")
+    order_summary.add_argument(
+        "--from", dest="start", type=date.fromisoformat, required=True
+    )
+    order_summary.add_argument(
+        "--to", dest="end", type=date.fromisoformat, required=True
+    )
     run = subcommands.add_parser("run")
     workflows = run.add_subparsers(dest="workflow")
     daily = workflows.add_parser("daily")
@@ -530,6 +548,44 @@ def main(argv: list[str] | None = None) -> int:
             if args.business_command == "import-minimal":
                 count = import_minimal_business_inputs(database, args.file)
                 print(f"Imported {count} minimal business input rows")
+                return 0
+            if args.business_command == "import-orders":
+                summary = import_order_costs(database, args.file)
+                print(
+                    "Imported order costs: "
+                    f"read={summary.read} "
+                    f"inserted={summary.inserted} "
+                    f"updated={summary.updated} "
+                    f"deduplicated={summary.deduplicated}"
+                )
+                print(
+                    f"date_range={summary.start.isoformat()}.."
+                    f"{summary.end.isoformat()} "
+                    f"total_cost_cny={summary.total_cost_cny:.2f}"
+                )
+                return 0
+            if args.business_command == "map-store":
+                map_store(
+                    database,
+                    args.platform,
+                    args.source,
+                    args.target,
+                )
+                print(
+                    f"Mapped store: {args.platform.lower()} "
+                    f"{args.source} -> {args.target}"
+                )
+                return 0
+            if args.business_command == "order-summary":
+                for row in order_cost_summary(
+                    database, args.start, args.end
+                ):
+                    print(
+                        f"{row.order_date.isoformat()} {row.platform} "
+                        f"{row.store} -> {row.canonical_store} "
+                        f"orders={row.orders} units={row.units} "
+                        f"total_cost_cny={row.total_cost_cny:.2f}"
+                    )
                 return 0
         except BusinessInputError as error:
             print(f"Business input rejected: {error}")

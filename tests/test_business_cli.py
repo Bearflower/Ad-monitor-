@@ -89,3 +89,48 @@ def test_business_import_minimal_cli(tmp_path, monkeypatch, capsys):
 
     assert main(["business", "import-minimal", "--file", str(source)]) == 0
     assert "Imported 1 minimal business input rows" in capsys.readouterr().out
+
+
+def test_business_order_cost_commands(tmp_path, monkeypatch, capsys):
+    settings = _settings(tmp_path)
+    database = Database(settings.database_path)
+    _insert_metric(database)
+    source = tmp_path / "orders.csv"
+    source.write_text(
+        "日期,平台,店铺,订单号,SKU,数量,单件成本_人民币\n"
+        "20260723,shopee,no4kud44da,ORDER-1,1 bag,1,5\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(Settings, "from_env", lambda: settings)
+
+    assert main(["business", "import-orders", "--file", str(source)]) == 0
+    assert (
+        "Imported order costs: read=1 inserted=1 updated=0 deduplicated=0"
+        in capsys.readouterr().out
+    )
+    assert main(
+        [
+            "business",
+            "map-store",
+            "--platform",
+            "shopee",
+            "--source",
+            "no4kud44da",
+            "--target",
+            "虾皮泰国",
+        ]
+    ) == 0
+    assert "no4kud44da -> 虾皮泰国" in capsys.readouterr().out
+    assert main(
+        [
+            "business",
+            "order-summary",
+            "--from",
+            "2026-07-23",
+            "--to",
+            "2026-07-23",
+        ]
+    ) == 0
+    output = capsys.readouterr().out
+    assert "2026-07-23 shopee no4kud44da -> 虾皮泰国" in output
+    assert "orders=1 units=1 total_cost_cny=5.00" in output

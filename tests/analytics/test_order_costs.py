@@ -6,7 +6,11 @@ import pytest
 from openpyxl import Workbook
 
 from adwatch.analytics.business_inputs import BusinessInputError
-from adwatch.analytics.order_costs import import_order_costs
+from adwatch.analytics.order_costs import (
+    import_order_costs,
+    map_store,
+    order_cost_summary,
+)
 from adwatch.storage.db import Database
 
 HEADERS = ("日期", "平台", "店铺", "订单号", "SKU", "数量", "单件成本_人民币")
@@ -146,3 +150,43 @@ def test_missing_columns_and_empty_data_are_rejected(tmp_path):
         import_order_costs(database, missing)
     with pytest.raises(BusinessInputError, match="no order rows"):
         import_order_costs(database, empty)
+
+
+def test_map_store_requires_collected_target_and_summary_uses_source_store(
+    tmp_path,
+):
+    source = tmp_path / "orders.csv"
+    _write_csv(
+        source,
+        [[20260708, "shopee", "no4kud44da", "o", "1 bag", 1, 5]],
+    )
+    database = Database(tmp_path / "adwatch.sqlite3")
+    database.migrate()
+    import_order_costs(database, source)
+    with database.transaction() as connection:
+        connection.execute(
+            """
+            INSERT INTO daily_ad_metrics(
+                platform, store, account_id, campaign_id, sku_id, data_date,
+                currency, spend, attributed_gmv, orders, roas, cpa, source
+            ) VALUES (
+                'shopee', '虾皮泰国', 'a', 'c', '__ALL__', '2026-07-08',
+                'THB', '10', '100', 1, '10', '10', 'ziniao'
+            )
+            """
+        )
+
+    with pytest.raises(BusinessInputError, match="unknown collected store"):
+        map_store(database, "shopee", "no4kud44da", "不存在")
+
+    map_store(database, "shopee", "no4kud44da", "虾皮泰国")
+    rows = order_cost_summary(
+        database, date(2026, 7, 8), date(2026, 7, 8)
+    )
+
+    assert len(rows) == 1
+    assert rows[0].store == "no4kud44da"
+    assert rows[0].canonical_store == "虾皮泰国"
+    assert rows[0].orders == 1
+    assert rows[0].units == 1
+    assert rows[0].total_cost_cny == Decimal("5.00")
