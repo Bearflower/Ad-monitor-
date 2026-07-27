@@ -52,3 +52,18 @@ def test_dashboard_filters_platform_and_exposes_filter_controls(tmp_path):
     assert 'name="platform"' in html
     assert "Shopee" in html
     assert 'class="eyebrow">Tiktok' not in html
+
+
+def test_dashboard_renders_trends_quality_and_execution(tmp_path):
+    data_date = date(2026, 7, 22)
+    database = Database(tmp_path / "test.sqlite3")
+    database.migrate()
+    PipelineRunner(database).run(MockCollector(Platform.SHOPEE), data_date)
+
+    page = render_dashboard(database, data_date, simulated=False)
+
+    assert "7 天趋势" in page
+    assert "14 天趋势" in page
+    assert "30 天趋势" in page
+    assert "采集运行质量" in page
+    assert "审批与执行状态" in page

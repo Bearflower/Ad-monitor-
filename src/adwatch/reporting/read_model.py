@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal
 
 from adwatch.storage.db import Database
@@ -35,6 +35,23 @@ class DailySnapshot:
     alerts: tuple[dict[str, str], ...]
     recommendations: tuple[dict[str, str], ...]
     capabilities: dict[str, str]
+
+
+@dataclass(frozen=True)
+class TrendPoint:
+    data_date: date
+    spend: Decimal
+    gmv: Decimal
+    roas: Decimal | None
+
+
+@dataclass(frozen=True)
+class DashboardSnapshot:
+    daily: DailySnapshot
+    trends: dict[int, tuple[TrendPoint, ...]]
+    collection_runs: tuple[dict[str, object], ...]
+    approval_counts: dict[str, int]
+    execution_counts: dict[str, int]
 
 
 class ReportReadModel:
@@ -201,4 +218,78 @@ class ReportReadModel:
                     "ready" if inventory_ready else "pending_data"
                 ),
             },
+        )
+
+    def dashboard(self, data_date: date) -> DashboardSnapshot:
+        start = data_date - timedelta(days=29)
+        with self.database.connect() as connection:
+            trend_rows = connection.execute(
+                """
+                SELECT data_date,
+                       SUM(CAST(spend AS REAL)) spend,
+                       SUM(CAST(attributed_gmv AS REAL)) gmv
+                FROM daily_ad_metrics
+                WHERE data_date BETWEEN ? AND ?
+                GROUP BY data_date
+                ORDER BY data_date
+                """,
+                (start.isoformat(), data_date.isoformat()),
+            ).fetchall()
+            points = tuple(
+                TrendPoint(
+                    data_date=date.fromisoformat(row["data_date"]),
+                    spend=Decimal(str(row["spend"] or 0)),
+                    gmv=Decimal(str(row["gmv"] or 0)),
+                    roas=(
+                        None
+                        if not row["spend"]
+                        else Decimal(str(row["gmv"] / row["spend"]))
+                    ),
+                )
+                for row in trend_rows
+            )
+            collection_runs = tuple(
+                dict(row)
+                for row in connection.execute(
+                    """
+                    SELECT mode, platform, status, received_count,
+                           accepted_count, quarantined_count, finished_at,
+                           error_message
+                    FROM collection_runs
+                    ORDER BY started_at DESC LIMIT 10
+                    """
+                ).fetchall()
+            )
+            approval_counts = {
+                row["status"]: int(row["count"])
+                for row in connection.execute(
+                    """
+                    SELECT status, COUNT(*) count
+                    FROM approvals GROUP BY status
+                    """
+                )
+            }
+            execution_counts = {
+                row["status"]: int(row["count"])
+                for row in connection.execute(
+                    """
+                    SELECT status, COUNT(*) count
+                    FROM execution_audits GROUP BY status
+                    """
+                )
+            }
+        return DashboardSnapshot(
+            daily=self.daily(data_date),
+            trends={
+                days: tuple(
+                    point
+                    for point in points
+                    if point.data_date
+                    >= data_date - timedelta(days=days - 1)
+                )
+                for days in (7, 14, 30)
+            },
+            collection_runs=collection_runs,
+            approval_counts=approval_counts,
+            execution_counts=execution_counts,
         )

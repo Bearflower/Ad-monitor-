@@ -26,7 +26,8 @@ def render_dashboard(
     campaign: str = "",
     sku: str = "",
 ) -> str:
-    snapshot = ReportReadModel(database).daily(data_date)
+    dashboard_snapshot = ReportReadModel(database).dashboard(data_date)
+    snapshot = dashboard_snapshot.daily
     platform_items = tuple(
         item
         for item in snapshot.platforms
@@ -81,6 +82,47 @@ def render_dashboard(
     ) or "<li>当前无策略建议</li>"
     source_badge = "模拟数据" if simulated else "真实数据"
     scope_label = platform.title() if platform else "TikTok + Shopee"
+    trends = "".join(
+        "<section class=\"panel\"><h2>"
+        f"{days} 天趋势</h2><div class=\"table-wrap\"><table>"
+        "<thead><tr><th>日期</th><th>消耗</th><th>GMV</th><th>ROAS</th>"
+        "</tr></thead><tbody>"
+        + (
+            "".join(
+                "<tr>"
+                f"<td>{point.data_date.isoformat()}</td>"
+                f"<td>{_format_decimal(point.spend)}</td>"
+                f"<td>{_format_decimal(point.gmv)}</td>"
+                f"<td>{_format_decimal(point.roas)}</td>"
+                "</tr>"
+                for point in points
+            )
+            or '<tr><td colspan="4">暂无数据</td></tr>'
+        )
+        + "</tbody></table></div></section>"
+        for days, points in dashboard_snapshot.trends.items()
+    )
+    run_rows = "".join(
+        "<tr>"
+        f"<td>{html.escape(str(run['platform']))}</td>"
+        f"<td>{html.escape(str(run['status']))}</td>"
+        f"<td>{run['accepted_count']}</td>"
+        f"<td>{run['quarantined_count']}</td>"
+        "</tr>"
+        for run in dashboard_snapshot.collection_runs
+    ) or '<tr><td colspan="4">暂无运行记录</td></tr>'
+    approval_summary = ", ".join(
+        f"{html.escape(status)}: {count}"
+        for status, count in sorted(
+            dashboard_snapshot.approval_counts.items()
+        )
+    ) or "暂无审批"
+    execution_summary = ", ".join(
+        f"{html.escape(status)}: {count}"
+        for status, count in sorted(
+            dashboard_snapshot.execution_counts.items()
+        )
+    ) or "暂无执行"
     return f"""<!doctype html>
 <html lang="zh-CN">
 <head>
@@ -152,6 +194,13 @@ def render_dashboard(
       <div class="table-wrap"><table><thead><tr><th>平台</th><th>店铺</th>
       <th>Campaign</th><th>SKU</th><th>ROAS</th><th>净利润</th>
       </tr></thead><tbody>{rows}</tbody></table></div></section>
+    {trends}
+    <section class="panel"><h2>采集运行质量</h2>
+      <div class="table-wrap"><table><thead><tr><th>平台</th><th>状态</th>
+      <th>写入</th><th>隔离</th></tr></thead><tbody>{run_rows}</tbody>
+      </table></div></section>
+    <section class="panel"><h2>审批与执行状态</h2>
+      <p>审批：{approval_summary}</p><p>执行：{execution_summary}</p></section>
     <div class="lists"><section class="panel"><h2>异常告警</h2><ul>{alerts}</ul></section>
     <section class="panel"><h2>策略建议（只读）</h2><ul>{recommendations}</ul></section></div>
   </main>
