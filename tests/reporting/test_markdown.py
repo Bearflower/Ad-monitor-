@@ -45,6 +45,8 @@ def test_daily_report_labels_profit_as_pending_without_business_data(tmp_path):
 
     assert "利润待补数据" in report
     assert "净利润(CNY) 0.00" not in report
+    assert "经营分析可信度" in report
+    assert "estimated_profit: pending_data" in report
 
 
 def test_monthly_report_aggregates_available_daily_snapshots(tmp_path):

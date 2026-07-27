@@ -34,6 +34,7 @@ class DailySnapshot:
     sku_performance: tuple[SkuPerformance, ...]
     alerts: tuple[dict[str, str], ...]
     recommendations: tuple[dict[str, str], ...]
+    capabilities: dict[str, str]
 
 
 class ReportReadModel:
@@ -125,6 +126,47 @@ class ReportReadModel:
                     (day,),
                 ).fetchall()
             )
+            capability_row = connection.execute(
+                """
+                SELECT COUNT(m.id) metric_count,
+                       COUNT(c.product_cost) cost_count,
+                       COUNT(p.net_profit_cny) profit_count,
+                       COUNT(
+                           CASE
+                             WHEN i.units IS NOT NULL
+                              AND CAST(i.expected_daily_units AS REAL) > 0
+                             THEN 1
+                           END
+                       ) inventory_count
+                FROM daily_ad_metrics m
+                LEFT JOIN product_costs c
+                  ON c.sku_id=m.sku_id AND c.effective_date=(
+                    SELECT MAX(c2.effective_date)
+                    FROM product_costs c2
+                    WHERE c2.sku_id=m.sku_id
+                      AND c2.effective_date<=m.data_date
+                  )
+                LEFT JOIN profit_results p
+                  ON p.platform=m.platform AND p.store=m.store
+                 AND p.account_id=m.account_id
+                 AND p.campaign_id=m.campaign_id AND p.sku_id=m.sku_id
+                 AND p.data_date=m.data_date
+                LEFT JOIN inventory_snapshots i
+                  ON i.sku_id=m.sku_id AND i.snapshot_date=m.data_date
+                WHERE m.data_date=?
+                """,
+                (day,),
+            ).fetchone()
+            metric_count = int(capability_row["metric_count"])
+            estimated_ready = metric_count > 0 and int(
+                capability_row["cost_count"]
+            ) == metric_count
+            verified_ready = metric_count > 0 and int(
+                capability_row["profit_count"]
+            ) == metric_count
+            inventory_ready = verified_ready and int(
+                capability_row["inventory_count"]
+            ) == metric_count
         return DailySnapshot(
             data_date=data_date,
             platforms=tuple(platforms),
@@ -145,4 +187,18 @@ class ReportReadModel:
             ),
             alerts=alerts,
             recommendations=recommendations,
+            capabilities={
+                "platform_metrics": (
+                    "ready" if metric_count else "pending_data"
+                ),
+                "estimated_profit": (
+                    "ready" if estimated_ready else "pending_data"
+                ),
+                "verified_profit": (
+                    "ready" if verified_ready else "pending_data"
+                ),
+                "inventory_safe_strategy": (
+                    "ready" if inventory_ready else "pending_data"
+                ),
+            },
         )

@@ -72,6 +72,40 @@ def test_missing_business_inputs_are_pending_data_not_write_circuit(tmp_path):
     assert [row[0] for row in severities] == ["info"]
 
 
+def test_analysis_exposes_capability_statuses_when_costs_are_missing(tmp_path):
+    data_date = date(2026, 7, 23)
+    database = Database(tmp_path / "test.sqlite3")
+    database.migrate()
+    PipelineRunner(database).run(MockCollector(Platform.SHOPEE), data_date)
+
+    summary = AnalysisService(database).run(data_date)
+
+    assert summary.capabilities == {
+        "platform_metrics": "ready",
+        "estimated_profit": "pending_data",
+        "verified_profit": "pending_data",
+        "inventory_safe_strategy": "pending_data",
+    }
+
+
+def test_seeded_complete_inputs_expose_all_analysis_capabilities(tmp_path):
+    data_date = date(2026, 7, 23)
+    database = Database(tmp_path / "test.sqlite3")
+    database.migrate()
+    PipelineRunner(database).run(MockCollector(Platform.SHOPEE), data_date)
+    service = AnalysisService(database)
+    service.seed_mock_business_data(data_date)
+
+    summary = service.run(data_date)
+
+    assert summary.capabilities == {
+        "platform_metrics": "ready",
+        "estimated_profit": "ready",
+        "verified_profit": "ready",
+        "inventory_safe_strategy": "ready",
+    }
+
+
 def test_analysis_wires_historical_spend_and_roas_anomalies(tmp_path):
     database = Database(tmp_path / "test.sqlite3")
     database.migrate()

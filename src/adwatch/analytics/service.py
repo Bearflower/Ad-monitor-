@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
 from decimal import Decimal
 
@@ -21,6 +21,7 @@ class AnalysisSummary:
     recommendations: int
     circuit_open: bool
     pending_data: int = 0
+    capabilities: dict[str, str] = field(default_factory=dict)
 
 
 class AnalysisService:
@@ -222,7 +223,48 @@ class AnalysisService:
             recommendations=recommendation_count,
             circuit_open=circuit.is_open,
             pending_data=pending_data_count,
+            capabilities=self._capabilities(rows),
         )
+
+    @staticmethod
+    def _capabilities(rows) -> dict[str, str]:
+        has_metrics = bool(rows)
+        has_costs = has_metrics and all(
+            row["product_cost"] is not None for row in rows
+        )
+        verified_fields = (
+            "product_cost",
+            "commission_rate",
+            "seller_shipping",
+            "coupons",
+            "allocated_fixed_cost",
+            "refund_amount",
+            "rate_to_cny",
+            "start_date",
+            "target_roas",
+        )
+        has_verified_profit = has_metrics and all(
+            all(row[field] is not None for field in verified_fields)
+            for row in rows
+        )
+        has_inventory = has_metrics and all(
+            row["inventory_units"] is not None
+            and row["expected_daily_units"] is not None
+            and Decimal(row["expected_daily_units"]) > 0
+            for row in rows
+        )
+        return {
+            "platform_metrics": "ready" if has_metrics else "pending_data",
+            "estimated_profit": "ready" if has_costs else "pending_data",
+            "verified_profit": (
+                "ready" if has_verified_profit else "pending_data"
+            ),
+            "inventory_safe_strategy": (
+                "ready"
+                if has_verified_profit and has_inventory
+                else "pending_data"
+            ),
+        }
 
     @staticmethod
     def _upsert_profit(connection, row, profit) -> None:

@@ -37,6 +37,10 @@ def render_daily_markdown(
         for label, values in (("TOP", top), ("BOTTOM", bottom))
         for item in values
     )
+    capabilities = "\n".join(
+        f"- {name}: {status}"
+        for name, status in snapshot.capabilities.items()
+    )
     return "\n".join(
         (
             f"# 广告每日快报 {snapshot.data_date.isoformat()} {marker}",
@@ -50,6 +54,9 @@ def render_daily_markdown(
             "",
             "【TOP3/BOTTOM3】",
             rankings or "- 无",
+            "",
+            "【经营分析可信度】",
+            capabilities,
             "",
             f"待审批建议：{len(snapshot.recommendations)} 条",
         )

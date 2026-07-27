@@ -221,3 +221,23 @@ def test_cli_page_exec_until_waits_for_matching_result():
 
     assert result == {"page": 2, "rows": [1]}
     assert sleeps == [1]
+
+
+def test_cli_page_exec_until_stops_after_three_attempts_by_default():
+    runner = FakeCommandRunner(
+        [
+            CommandResult('{"ok":true,"data":{"data":{"result":"null"}}}'),
+            CommandResult('{"ok":true,"data":{"data":{"result":"null"}}}'),
+            CommandResult('{"ok":true,"data":{"data":{"result":"null"}}}'),
+        ]
+    )
+    client = ZiniaoCliClient(runner=runner, sleeper=lambda _: None)
+
+    with pytest.raises(ZiniaoApiError, match="after 3 attempts"):
+        client.page_exec_until(
+            "456",
+            "JSON.stringify(state)",
+            ready=lambda value: value is not None,
+        )
+
+    assert len(runner.commands) == 3

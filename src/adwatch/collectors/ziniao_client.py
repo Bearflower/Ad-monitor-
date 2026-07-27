@@ -79,7 +79,7 @@ class ZiniaoCliClient:
         script: str,
         *,
         ready: Callable[[object], bool],
-        attempts: int = 15,
+        attempts: int = 3,
     ) -> object:
         for attempt in range(attempts):
             result = self.page_exec(store_id, script)
