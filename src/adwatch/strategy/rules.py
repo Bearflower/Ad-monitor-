@@ -71,6 +71,24 @@ def recommend(context: StrategyContext) -> tuple[Recommendation, ...]:
                 reason="ROAS is below 70% of target after learning",
             ),
         )
+    if target_ratio < Decimal("0.80"):
+        return (
+            Recommendation(
+                rule_code="lower_roas_target",
+                action="adjust_roas_target",
+                change_ratio=Decimal("-0.20"),
+                reason="ROAS remained below 80% of target after learning",
+            ),
+        )
+    if target_ratio > Decimal("1.50"):
+        return (
+            Recommendation(
+                rule_code="raise_roas_target",
+                action="adjust_roas_target",
+                change_ratio=Decimal("0.20"),
+                reason="ROAS exceeded 150% of target after learning",
+            ),
+        )
     if (
         target_ratio >= Decimal("1")
         and context.net_profit > 0

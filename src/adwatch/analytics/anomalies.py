@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from datetime import date
 from decimal import Decimal
 
 
@@ -17,6 +18,9 @@ def detect_anomalies(
     baseline_roas: Decimal | None,
     inventory_units: int,
     expected_daily_units: int | Decimal,
+    platform: str | None = None,
+    campaign_start: date | None = None,
+    data_date: date | None = None,
 ) -> tuple[Anomaly, ...]:
     anomalies: list[Anomaly] = []
     if (
@@ -52,6 +56,23 @@ def detect_anomalies(
                     code="inventory_risk",
                     severity="critical",
                     message="Inventory cover is below 7 days",
+                )
+            )
+    if (
+        platform
+        and campaign_start
+        and data_date
+        and current_spend == 0
+        and baseline_spend is not None
+        and baseline_spend > 0
+    ):
+        learning_days = 7 if platform == "tiktok" else 14
+        if (data_date - campaign_start).days < learning_days:
+            anomalies.append(
+                Anomaly(
+                    code="learning_interruption",
+                    severity="critical",
+                    message="Campaign spend stopped during learning period",
                 )
             )
     return tuple(anomalies)

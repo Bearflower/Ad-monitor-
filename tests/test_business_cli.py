@@ -73,3 +73,19 @@ def test_business_import_cli_reports_validation_error(tmp_path, monkeypatch, cap
 
     assert main(["business", "import", "--file", str(source)]) == 2
     assert "Business input rejected:" in capsys.readouterr().out
+
+
+def test_business_import_minimal_cli(tmp_path, monkeypatch, capsys):
+    settings = _settings(tmp_path)
+    database = Database(settings.database_path)
+    _insert_metric(database)
+    source = tmp_path / "minimal.csv"
+    source.write_text(
+        "data_date,total_product_cost,refund_amount\n"
+        "2026-07-23,120,0\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(Settings, "from_env", lambda: settings)
+
+    assert main(["business", "import-minimal", "--file", str(source)]) == 0
+    assert "Imported 1 minimal business input rows" in capsys.readouterr().out

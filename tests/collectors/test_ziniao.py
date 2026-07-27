@@ -8,6 +8,7 @@ from adwatch.collectors.ziniao import (
     ZiniaoNotConfigured,
     parse_shopee_campaign_summary,
     parse_shopee_product_rows,
+    parse_tiktok_campaign_rows,
 )
 from adwatch.config import Settings
 from adwatch.domain import Platform
@@ -178,6 +179,60 @@ def test_tiktok_collector_returns_empty_when_dashboard_has_no_campaigns(tmp_path
 
     assert result == []
     assert "ads-creation/dashboard" in client.calls[0][1]
+
+
+def test_parse_tiktok_campaign_rows_maps_real_campaign_metrics():
+    metrics = parse_tiktok_campaign_rows(
+        [
+            {
+                "campaign_id": "183746",
+                "campaign": "GMV Max Product 1",
+                "spend": "฿1,234.50",
+                "gmv": "฿4,321.00",
+                "orders": "18",
+                "product_id": "749302",
+                "currency": "THB",
+            }
+        ],
+        store="泰国本土tk",
+        account_id="27834942307818",
+        data_date=date(2026, 7, 23),
+    )
+
+    assert len(metrics) == 1
+    assert metrics[0].campaign_id == "183746"
+    assert metrics[0].sku_id == "749302"
+    assert metrics[0].spend == Decimal("1234.50")
+    assert metrics[0].attributed_gmv == Decimal("4321.00")
+    assert metrics[0].orders == 18
+
+
+def test_tiktok_collector_uses_campaign_extraction_script(tmp_path):
+    client = FakeCliClient(
+        [
+            {
+                "campaign_id": "183746",
+                "campaign": "GMV Max",
+                "spend": "100",
+                "gmv": "300",
+                "orders": "4",
+                "product_id": "",
+                "currency": "THB",
+            }
+        ]
+    )
+    settings = Settings(
+        data_dir=tmp_path,
+        ziniao_tiktok_store_id="27834942307818",
+        ziniao_tiktok_store_name="泰国本土tk",
+    )
+
+    metrics = ZiniaoCollector(
+        settings, Platform.TIKTOK, cli_client=client
+    ).collect(date(2026, 7, 23))
+
+    assert metrics[0].sku_id == "__ALL__"
+    assert "campaign_id" in client.calls[0][2]
 
 
 def test_shopee_collector_merges_all_paginated_product_rows(tmp_path):

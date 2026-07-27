@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from decimal import Decimal
 
+from adwatch.analytics.anomalies import detect_anomalies
 from adwatch.analytics.profit import ProfitInput, calculate_profit
 from adwatch.storage.analytics import AnalyticsRepository
 from adwatch.storage.db import Database
@@ -19,6 +20,7 @@ class AnalysisSummary:
     alerts: int
     recommendations: int
     circuit_open: bool
+    pending_data: int = 0
 
 
 class AnalysisService:
@@ -34,6 +36,8 @@ class AnalysisService:
         profit_count = 0
         alert_count = 0
         recommendation_count = 0
+        pending_data_count = 0
+        operational_alert_count = 0
         with self.database.transaction() as connection:
             connection.execute(
                 "DELETE FROM profit_results WHERE data_date=?",
@@ -44,6 +48,45 @@ class AnalysisService:
                 (data_date.isoformat(),),
             )
             for row in rows:
+                baseline = self.repository.baseline_for(row, data_date)
+                for anomaly in detect_anomalies(
+                    current_spend=Decimal(row["spend"]),
+                    baseline_spend=(
+                        None
+                        if baseline is None or baseline["spend"] is None
+                        else Decimal(str(baseline["spend"]))
+                    ),
+                    current_roas=(
+                        None
+                        if row["roas"] is None
+                        else Decimal(row["roas"])
+                    ),
+                    baseline_roas=(
+                        None
+                        if baseline is None or baseline["roas"] is None
+                        else Decimal(str(baseline["roas"]))
+                    ),
+                    inventory_units=int(row["inventory_units"] or 0),
+                    expected_daily_units=Decimal(
+                        row["expected_daily_units"] or "0"
+                    ),
+                    platform=row["platform"],
+                    campaign_start=(
+                        None
+                        if row["start_date"] is None
+                        else date.fromisoformat(row["start_date"])
+                    ),
+                    data_date=data_date,
+                ):
+                    self._upsert_alert(
+                        connection,
+                        row,
+                        anomaly.code,
+                        anomaly.severity,
+                        anomaly.message,
+                    )
+                    alert_count += 1
+                    operational_alert_count += 1
                 required = (
                     "product_cost",
                     "commission_rate",
@@ -59,10 +102,11 @@ class AnalysisService:
                         connection,
                         row,
                         "missing_business_input",
-                        "critical",
+                        "info",
                         f"Missing business inputs: {', '.join(missing)}",
                     )
                     alert_count += 1
+                    pending_data_count += 1
                     continue
 
                 profit = calculate_profit(
@@ -93,7 +137,11 @@ class AnalysisService:
                     platform=row["platform"],
                     campaign_start=date.fromisoformat(row["start_date"]),
                     data_date=data_date,
-                    consecutive_low_days=0,
+                    consecutive_low_days=(
+                        self.repository.consecutive_campaign_low_days(
+                            row, data_date
+                        )
+                    ),
                     roas=Decimal(row["roas"] or "0"),
                     target_roas=Decimal(row["target_roas"]),
                     net_profit=profit.net_profit_cny,
@@ -106,8 +154,9 @@ class AnalysisService:
                         """
                         INSERT INTO recommendations(
                             rule_code, platform, campaign_id, sku_id, data_date,
-                            action, change_ratio, reason, requires_approval
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            action, change_ratio, reason, requires_approval,
+                            store_id
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         ON CONFLICT(
                             rule_code, platform, campaign_id, sku_id, data_date
                         ) DO UPDATE SET
@@ -115,6 +164,7 @@ class AnalysisService:
                             change_ratio=excluded.change_ratio,
                             reason=excluded.reason,
                             requires_approval=excluded.requires_approval,
+                            store_id=excluded.store_id,
                             updated_at=strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
                         """,
                         (
@@ -131,16 +181,21 @@ class AnalysisService:
                             ),
                             item.reason,
                             int(item.requires_approval),
+                            row["account_id"],
                         ),
                     )
                     recommendation_count += 1
 
             circuit = evaluate_circuit(
                 CircuitInputs(
-                    daily_alerts=alert_count,
-                    webdriver_failures=0,
-                    quality_ok=alert_count == 0,
-                    consecutive_global_low_roas_days=0,
+                    daily_alerts=operational_alert_count,
+                    webdriver_failures=self.repository.recent_webdriver_failures(),
+                    quality_ok=True,
+                    consecutive_global_low_roas_days=(
+                        self.repository.consecutive_global_low_roas_days(
+                            data_date
+                        )
+                    ),
                 )
             )
             connection.execute(
@@ -166,6 +221,7 @@ class AnalysisService:
             alerts=alert_count,
             recommendations=recommendation_count,
             circuit_open=circuit.is_open,
+            pending_data=pending_data_count,
         )
 
     @staticmethod

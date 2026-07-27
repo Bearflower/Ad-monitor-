@@ -42,3 +42,31 @@ def test_negative_profit_or_stock_risk_blocks_budget_increase():
         inventory_cover_days=Decimal("3"),
     )
     assert all(item.action != "increase_budget" for item in recommend(context))
+
+
+def test_moderately_low_roas_recommends_lower_target_after_learning():
+    result = recommend(
+        StrategyContext.example(
+            platform="shopee",
+            roas=Decimal("1.5"),
+            target_roas=Decimal("2"),
+        )
+    )
+
+    assert [(item.action, item.change_ratio) for item in result] == [
+        ("adjust_roas_target", Decimal("-0.20"))
+    ]
+
+
+def test_roas_above_one_fifty_percent_recommends_higher_target():
+    result = recommend(
+        StrategyContext.example(
+            platform="shopee",
+            roas=Decimal("3.2"),
+            target_roas=Decimal("2"),
+        )
+    )
+
+    assert [(item.action, item.change_ratio) for item in result] == [
+        ("adjust_roas_target", Decimal("0.20"))
+    ]

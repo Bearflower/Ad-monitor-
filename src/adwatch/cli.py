@@ -1,4 +1,6 @@
 import argparse
+import calendar
+import json
 import shutil
 from datetime import date, timedelta
 from html import escape
@@ -8,8 +10,10 @@ from adwatch.analytics.business_inputs import (
     BusinessInputError,
     export_business_template,
     import_business_inputs,
+    import_minimal_business_inputs,
 )
 from adwatch.analytics.service import AnalysisService
+from adwatch.approval.server import serve_callback
 from adwatch.collectors.mock import MockCollector
 from adwatch.collectors.ziniao import ZiniaoCollector, ZiniaoNotConfigured
 from adwatch.collectors.ziniao_client import (
@@ -20,9 +24,22 @@ from adwatch.collectors.ziniao_client import (
 from adwatch.config import Settings
 from adwatch.dashboard.app import serve
 from adwatch.domain import Platform
+from adwatch.execution.executor import ExecutionError, SafeExecutor
+from adwatch.execution.policy import ExecutionPolicy, PolicyError
+from adwatch.execution.ziniao_backend import ZiniaoExecutionBackend
+from adwatch.operations.backup import create_backup, verify_backup
+from adwatch.operations.launch_checklist import (
+    build_launch_checklist,
+    render_launch_checklist,
+)
+from adwatch.operations.readiness import readiness_status
 from adwatch.pipeline.runner import PipelineRunner
 from adwatch.reporting.delivery import deliver_report
-from adwatch.reporting.markdown import render_daily_markdown
+from adwatch.reporting.markdown import (
+    render_daily_markdown,
+    render_monthly_markdown,
+    render_weekly_markdown,
+)
 from adwatch.reporting.quality import write_quality_report
 from adwatch.reporting.read_model import ReportReadModel
 from adwatch.storage.db import Database
@@ -36,6 +53,31 @@ def build_parser() -> argparse.ArgumentParser:
     collect.add_argument("--mode", choices=("mock", "ziniao"), default="mock")
     collect.add_argument("--date", type=date.fromisoformat, default=date.today())
     subcommands.add_parser("doctor")
+    subcommands.add_parser("readiness")
+    launch_checklist = subcommands.add_parser("launch-checklist")
+    launch_checklist.add_argument(
+        "--format", choices=("markdown", "json"), default="markdown"
+    )
+    report = subcommands.add_parser("report")
+    report_commands = report.add_subparsers(dest="report_command")
+    monthly = report_commands.add_parser("monthly")
+    monthly.add_argument("--month", required=True)
+    weekly = report_commands.add_parser("weekly")
+    weekly.add_argument("--end", type=date.fromisoformat, required=True)
+    backup = subcommands.add_parser("backup")
+    backup_commands = backup.add_subparsers(dest="backup_command")
+    backup_create = backup_commands.add_parser("create")
+    backup_create.add_argument("--output", type=Path, required=True)
+    approval = subcommands.add_parser("approval")
+    approval_commands = approval.add_subparsers(dest="approval_command")
+    approval_serve = approval_commands.add_parser("serve")
+    approval_serve.add_argument("--host", default="127.0.0.1")
+    approval_serve.add_argument("--port", type=int, default=8787)
+    execute = subcommands.add_parser("execute")
+    execute.add_argument("execution_mode", choices=("shadow", "live"))
+    execute.add_argument("--approval-id", required=True)
+    execute.add_argument("--idempotency-key", required=True)
+    execute.add_argument("--expected-before", required=True)
     seed = subcommands.add_parser("seed-business-data")
     seed.add_argument("--date", type=date.fromisoformat, default=date.today())
     analyze = subcommands.add_parser("analyze")
@@ -52,6 +94,8 @@ def build_parser() -> argparse.ArgumentParser:
     export_template.add_argument("--output", type=Path, required=True)
     import_inputs = business_commands.add_parser("import")
     import_inputs.add_argument("--file", type=Path, required=True)
+    import_minimal = business_commands.add_parser("import-minimal")
+    import_minimal.add_argument("--file", type=Path, required=True)
     run = subcommands.add_parser("run")
     workflows = run.add_subparsers(dest="workflow")
     daily = workflows.add_parser("daily")
@@ -112,6 +156,179 @@ def main(argv: list[str] | None = None) -> int:
                 )
                 return 2
         return 0
+    if args.command == "readiness":
+        database.migrate()
+        with database.connect() as connection:
+            has_tiktok_campaign = bool(
+                connection.execute(
+                    """
+                    SELECT 1 FROM daily_ad_metrics
+                    WHERE platform='tiktok' LIMIT 1
+                    """
+                ).fetchone()
+            )
+            has_business_costs = bool(
+                connection.execute(
+                    "SELECT 1 FROM product_costs LIMIT 1"
+                ).fetchone()
+            )
+        checks = readiness_status(
+            bridge_ready=_ziniao_bridge_ready(),
+            has_tiktok_campaign=has_tiktok_campaign,
+            has_business_costs=has_business_costs,
+            feishu_callback_ready=settings.feishu_callback_ready,
+        )
+        for check in checks:
+            print(f"{check.name}={check.status}")
+        return 0 if all(item.status == "ready" for item in checks) else 2
+    if args.command == "launch-checklist":
+        database.migrate()
+        with database.connect() as connection:
+            has_tiktok_campaign = bool(
+                connection.execute(
+                    """
+                    SELECT 1 FROM daily_ad_metrics
+                    WHERE platform='tiktok' LIMIT 1
+                    """
+                ).fetchone()
+            )
+            has_business_costs = bool(
+                connection.execute(
+                    "SELECT 1 FROM product_costs LIMIT 1"
+                ).fetchone()
+            )
+            settings_rows = {
+                row["key"]: row["value"]
+                for row in connection.execute(
+                    """
+                    SELECT key, value FROM system_settings
+                    WHERE key IN ('shadow_reconciled', 'rollback_drilled')
+                    """
+                )
+            }
+        items = build_launch_checklist(
+            bridge_ready=_ziniao_bridge_ready(),
+            tiktok_campaign_ready=has_tiktok_campaign,
+            business_costs_ready=has_business_costs,
+            callback_ready=settings.feishu_callback_ready,
+            shadow_reconciled=settings_rows.get("shadow_reconciled") == "true",
+            rollback_drilled=settings_rows.get("rollback_drilled") == "true",
+            live_allowlist_ready=bool(settings.live_allowlist),
+        )
+        if args.format == "json":
+            print(
+                json.dumps(
+                    [
+                        {"code": item.code, "description": item.description}
+                        for item in items
+                    ],
+                    ensure_ascii=False,
+                )
+            )
+        else:
+            print(render_launch_checklist(items))
+        return 0
+    if args.command == "approval":
+        database.migrate()
+        if args.approval_command == "serve":
+            if not settings.feishu_callback_secret:
+                print("FEISHU_CALLBACK_SECRET is required")
+                return 2
+            print(
+                f"Approval callback: http://{args.host}:{args.port}"
+            )
+            serve_callback(
+                database,
+                secret=settings.feishu_callback_secret,
+                host=args.host,
+                port=args.port,
+            )
+            return 0
+        parser.print_help()
+        return 2
+    if args.command == "execute":
+        if args.execution_mode == "live" and not settings.live_writes:
+            print("ADWATCH_LIVE_WRITES is disabled")
+            return 2
+        try:
+            expected_before = json.loads(args.expected_before)
+        except json.JSONDecodeError as error:
+            print(f"--expected-before must be valid JSON: {error}")
+            return 2
+        if not isinstance(expected_before, dict):
+            print("--expected-before must be a JSON object")
+            return 2
+        database.migrate()
+        policy = ExecutionPolicy(
+            live_writes=settings.live_writes,
+            allowed_targets=settings.live_allowlist,
+        )
+        backend = ZiniaoExecutionBackend(
+            ZiniaoCliClient(),
+            mode=args.execution_mode,
+            policy=policy,
+        )
+        try:
+            result = SafeExecutor(database, backend).execute(
+                args.approval_id,
+                idempotency_key=args.idempotency_key,
+                expected_before=expected_before,
+            )
+        except (ExecutionError, PolicyError, OSError, ZiniaoApiError) as error:
+            print(f"Execution rejected: {error}")
+            return 2
+        print(f"audit={result.audit_id} status={result.status}")
+        return 0 if result.status in {"succeeded", "rolled_back"} else 2
+    if args.command == "report":
+        database.migrate()
+        if args.report_command == "monthly":
+            try:
+                year_text, month_text = args.month.split("-", 1)
+                year, month_number = int(year_text), int(month_text)
+                days = calendar.monthrange(year, month_number)[1]
+            except (ValueError, IndexError):
+                print("Month must use YYYY-MM format")
+                return 2
+            read_model = ReportReadModel(database)
+            snapshots = [
+                read_model.daily(date(year, month_number, day))
+                for day in range(1, days + 1)
+            ]
+            snapshots = [item for item in snapshots if item.platforms]
+            markdown = render_monthly_markdown(
+                snapshots, month=args.month
+            )
+            destination = settings.report_dir / f"monthly-{args.month}.md"
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_text(markdown, encoding="utf-8")
+            print(f"Monthly report: {destination}")
+            return 0
+        if args.report_command == "weekly":
+            read_model = ReportReadModel(database)
+            snapshots = [
+                read_model.daily(args.end - timedelta(days=offset))
+                for offset in range(6, -1, -1)
+            ]
+            snapshots = [item for item in snapshots if item.platforms]
+            markdown = render_weekly_markdown(snapshots)
+            destination = (
+                settings.report_dir / f"weekly-{args.end.isoformat()}.md"
+            )
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_text(markdown, encoding="utf-8")
+            print(f"Weekly report: {destination}")
+            return 0
+        parser.print_help()
+        return 2
+    if args.command == "backup":
+        database.migrate()
+        if args.backup_command == "create":
+            destination = create_backup(database, args.output)
+            integrity = verify_backup(destination)
+            print(f"Backup: {destination} integrity={integrity}")
+            return 0 if integrity == "ok" else 2
+        parser.print_help()
+        return 2
     if args.command == "seed-business-data":
         database.migrate()
         count = AnalysisService(database).seed_mock_business_data(args.date)
@@ -143,6 +360,10 @@ def main(argv: list[str] | None = None) -> int:
             if args.business_command == "import":
                 count = import_business_inputs(database, args.file)
                 print(f"Imported {count} business input rows")
+                return 0
+            if args.business_command == "import-minimal":
+                count = import_minimal_business_inputs(database, args.file)
+                print(f"Imported {count} minimal business input rows")
                 return 0
         except BusinessInputError as error:
             print(f"Business input rejected: {error}")
@@ -179,21 +400,22 @@ def main(argv: list[str] | None = None) -> int:
             MockCollector if args.mode == "mock" else ZiniaoCollector
         )
         runner = PipelineRunner(database)
-        try:
-            summaries = [
-                runner.run(
-                    (
-                        collector_type(platform)
-                        if args.mode == "mock"
-                        else collector_type(settings, platform)
-                    ),
-                    args.date,
+        summaries = []
+        collection_errors = []
+        for platform in (Platform.TIKTOK, Platform.SHOPEE):
+            collector = (
+                collector_type(platform)
+                if args.mode == "mock"
+                else collector_type(settings, platform)
+            )
+            try:
+                summaries.append(runner.run(collector, args.date))
+            except Exception as error:
+                collection_errors.append((platform.value, error))
+                print(
+                    f"{platform.value} collection failed: "
+                    f"{type(error).__name__}: {error}"
                 )
-                for platform in (Platform.TIKTOK, Platform.SHOPEE)
-            ]
-        except ZiniaoNotConfigured as error:
-            print(str(error))
-            return 2
         write_quality_report(
             settings.report_dir, args.date, args.mode, summaries
         )
@@ -211,12 +433,13 @@ def main(argv: list[str] | None = None) -> int:
             report_dir=settings.report_dir,
             webhook_url=settings.feishu_webhook,
         )
+        run_status = "partial" if collection_errors else "ok"
         print(
-            f"daily_run=ok metrics={analysis_summary.metrics_processed} "
+            f"daily_run={run_status} metrics={analysis_summary.metrics_processed} "
             f"recommendations={analysis_summary.recommendations} "
             f"delivery={delivery.status} report={delivery.path}"
         )
-        return 0
+        return 2 if collection_errors else 0
     if args.command == "collect":
         database.migrate()
         if args.mode == "mock":
@@ -264,6 +487,14 @@ def entrypoint() -> None:
     raise SystemExit(main())
 
 
+def _ziniao_bridge_ready() -> bool:
+    try:
+        ZiniaoCliClient().get_store_list()
+        return True
+    except (OSError, ZiniaoApiError):
+        return False
+
+
 def render_launchd_plist(project_dir: Path) -> str:
     executable = project_dir / ".venv" / "bin" / "adwatch"
     stdout = project_dir / "var" / "logs" / "launchd.out.log"
@@ -286,7 +517,7 @@ def render_launchd_plist(project_dir: Path) -> str:
         f"<key>StandardOutPath</key><string>{escape(str(stdout))}</string>"
         f"<key>StandardErrorPath</key><string>{escape(str(stderr))}</string>"
         "<key>StartCalendarInterval</key><dict>"
-        "<key>Hour</key><integer>9</integer>"
+        "<key>Hour</key><integer>8</integer>"
         "<key>Minute</key><integer>0</integer>"
         "</dict><key>RunAtLoad</key><false/>"
         "</dict></plist>"

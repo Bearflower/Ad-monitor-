@@ -18,6 +18,7 @@ class ExecutionBackend(Protocol):
     def read_current(self, recommendation: dict) -> dict: ...
     def execute(self, recommendation: dict) -> dict: ...
     def capture(self, label: str) -> str: ...
+    def rollback(self, recommendation: dict, before: dict) -> dict: ...
 
 
 @dataclass(frozen=True)
@@ -88,7 +89,61 @@ class SafeExecutor:
         now = datetime.now(timezone.utc).isoformat()
         audit_id = str(uuid.uuid4())
         before_screenshot = self.backend.capture(f"{audit_id}-before")
-        after = self.backend.execute(recommendation)
+        try:
+            after = self.backend.execute(recommendation)
+        except Exception as error:
+            status = "failed"
+            after = None
+            rollback = getattr(self.backend, "rollback", None)
+            if callable(rollback):
+                try:
+                    after = rollback(recommendation, current)
+                    status = "rolled_back"
+                except Exception:
+                    status = "rollback_failed"
+            after_screenshot = self.backend.capture(f"{audit_id}-after")
+            with self.database.transaction() as connection:
+                connection.execute(
+                    """
+                    INSERT INTO execution_audits(
+                        id, approval_id, action, before_json, after_json,
+                        before_screenshot, after_screenshot, status,
+                        error_code, error_message, idempotency_key,
+                        created_at, finished_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        audit_id,
+                        approval_id,
+                        row["action"],
+                        json.dumps(current, sort_keys=True),
+                        (
+                            None
+                            if after is None
+                            else json.dumps(after, sort_keys=True)
+                        ),
+                        before_screenshot,
+                        after_screenshot,
+                        status,
+                        type(error).__name__,
+                        str(error),
+                        idempotency_key,
+                        now,
+                        datetime.now(timezone.utc).isoformat(),
+                    ),
+                )
+                if status == "rollback_failed":
+                    connection.execute(
+                        """
+                        UPDATE circuit_state
+                        SET is_open=1,
+                            reasons_json='["rollback_failure"]',
+                            opened_at=?
+                        WHERE id=1
+                        """,
+                        (datetime.now(timezone.utc).isoformat(),),
+                    )
+            return ExecutionResult(audit_id=audit_id, status=status)
         after_screenshot = self.backend.capture(f"{audit_id}-after")
         with self.database.transaction() as connection:
             connection.execute(

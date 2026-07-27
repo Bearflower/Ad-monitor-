@@ -34,6 +34,7 @@ COLUMNS = (
     "baseline_budget",
 )
 INPUT_COLUMNS = COLUMNS[6:]
+MINIMAL_COLUMNS = ("data_date", "total_product_cost", "refund_amount")
 
 
 def export_business_template(
@@ -170,6 +171,77 @@ def import_business_inputs(database: Database, source: Path) -> int:
                 (row["currency"], row["data_date"], row["rate_to_cny"]),
             )
     return len(validated)
+
+
+def import_minimal_business_inputs(database: Database, source: Path) -> int:
+    with source.open(encoding="utf-8-sig", newline="") as handle:
+        reader = csv.DictReader(handle)
+        missing_columns = [
+            key for key in MINIMAL_COLUMNS if key not in (reader.fieldnames or ())
+        ]
+        if missing_columns:
+            raise BusinessInputError(
+                f"missing columns: {', '.join(missing_columns)}"
+            )
+        raw_rows = list(reader)
+
+    validated = []
+    for index, row in enumerate(raw_rows, start=2):
+        try:
+            data_date = date.fromisoformat((row["data_date"] or "").strip())
+            product_cost = Decimal((row["total_product_cost"] or "").strip())
+            refund_amount = Decimal((row["refund_amount"] or "0").strip())
+        except (ValueError, InvalidOperation) as error:
+            raise BusinessInputError(
+                f"line {index} has invalid values"
+            ) from error
+        if product_cost < 0 or refund_amount < 0:
+            raise BusinessInputError(f"line {index} contains negative values")
+        validated.append((index, data_date, product_cost, refund_amount))
+
+    resolved = []
+    with database.connect() as connection:
+        for line, data_date, product_cost, refund_amount in validated:
+            metrics = connection.execute(
+                """
+                SELECT platform, store, campaign_id, sku_id, currency
+                FROM daily_ad_metrics WHERE data_date=?
+                ORDER BY platform, campaign_id, sku_id
+                """,
+                (data_date.isoformat(),),
+            ).fetchall()
+            if len(metrics) != 1:
+                raise BusinessInputError(
+                    f"line {line} date {data_date.isoformat()} "
+                    f"matches {len(metrics)} metric rows"
+                )
+            resolved.append((data_date, product_cost, refund_amount, metrics[0]))
+
+    with database.transaction() as connection:
+        for data_date, product_cost, refund_amount, metric in resolved:
+            connection.execute(
+                "INSERT OR IGNORE INTO sku_mappings(sku_id) VALUES (?)",
+                (metric["sku_id"],),
+            )
+            connection.execute(
+                """
+                INSERT INTO product_costs(
+                    sku_id, effective_date, product_cost, commission_rate,
+                    seller_shipping, coupons, allocated_fixed_cost,
+                    refund_amount
+                ) VALUES (?, ?, ?, '0', '0', '0', '0', ?)
+                ON CONFLICT(sku_id, effective_date) DO UPDATE SET
+                    product_cost=excluded.product_cost,
+                    refund_amount=excluded.refund_amount
+                """,
+                (
+                    metric["sku_id"],
+                    data_date.isoformat(),
+                    str(product_cost),
+                    str(refund_amount),
+                ),
+            )
+    return len(resolved)
 
 
 def _validate_row(row: dict[str, str], line: int) -> dict[str, str]:

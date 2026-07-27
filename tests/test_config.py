@@ -40,3 +40,31 @@ def test_settings_load_project_dotenv_without_overwriting_environment(
 
     assert settings.ziniao_tiktok_store_id == "from-environment"
     assert settings.ziniao_shopee_store_id == "222"
+
+
+def test_feishu_callback_configuration(monkeypatch):
+    monkeypatch.setenv("FEISHU_CALLBACK_SECRET", "secret")
+    monkeypatch.setenv("FEISHU_CALLBACK_PUBLIC_URL", "https://example.test/cb")
+
+    settings = Settings.from_env()
+
+    assert settings.feishu_callback_secret == "secret"
+    assert settings.feishu_callback_ready is True
+
+
+def test_live_writes_default_off_and_allowlist_is_explicit(monkeypatch):
+    monkeypatch.setenv("ADWATCH_LIVE_WRITES", "true")
+    monkeypatch.setenv(
+        "ADWATCH_LIVE_ALLOWLIST",
+        "shopee:store-1:campaign-1,tiktok:store-2:campaign-2",
+    )
+
+    settings = Settings.from_env()
+
+    assert settings.live_writes is True
+    assert settings.live_allowlist == frozenset(
+        {
+            ("shopee", "store-1", "campaign-1"),
+            ("tiktok", "store-2", "campaign-2"),
+        }
+    )

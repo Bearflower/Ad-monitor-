@@ -1,6 +1,9 @@
 # Adwatch
 
-TikTok 与 Shopee 广告盯盘自动化系统。当前版本提供 SQLite 数据底座、双平台模拟采集、利润与策略分析、风控审批、日报、飞书降级和本地只读看板。
+TikTok 与 Shopee 广告盯盘自动化系统。当前版本提供 SQLite
+数据底座、双平台采集、利润与异常分析、策略建议、审批回调、
+Shadow/Live 安全执行框架、日报/周报/月报、备份和本地只读看板。
+真实广告写入默认关闭。
 
 ## 环境要求
 
@@ -16,7 +19,7 @@ python -m pip install -e '.[dev]'
 cp .env.example .env
 ```
 
-程序直接读取系统环境变量；如需使用 `.env` 文件，可在启动前由 shell 或进程管理器加载。
+程序读取系统环境变量和项目根目录的 `.env`。
 
 ## 初始化
 
@@ -38,12 +41,10 @@ python -m adwatch collect --mode mock --date 2026-07-22
 
 ## 紫鸟模式
 
-配置下列环境变量后才能显式使用 `--mode ziniao`：
+配置下列店铺 ID 后才能显式使用 `--mode ziniao`：
 
-- `ZINIAO_COMPANY`
-- `ZINIAO_USERNAME`
-- `ZINIAO_PASSWORD`
-- `ZINIAO_ENDPOINT`
+- `ZINIAO_TIKTOK_STORE_ID`
+- `ZINIAO_SHOPEE_STORE_ID`
 
 缺少配置时命令返回非零状态并说明缺失项。系统不会静默切换到模拟数据。
 
@@ -77,6 +78,54 @@ python -m adwatch run daily --mode mock --date 2026-07-22
 ```
 
 CSV 会整批校验；任意一行缺值或格式错误时，不会写入任何一行。目前 Shopee 采集结果的 `sku_id` 是 `__ALL__`，代表 Campaign 当日汇总，因此 `product_cost`、运费、优惠、固定成本和退款应填写该 Campaign 当日总额；`commission_rate` 填小数，例如 8% 填 `0.08`。`rate_to_cny` 表示 1 单位广告币种折合多少人民币。
+
+若一天只有一条汇总广告记录，可使用最小三列 CSV：
+
+```csv
+data_date,total_product_cost,refund_amount
+2026-07-23,120,0
+```
+
+```bash
+.venv/bin/adwatch business import-minimal --file minimal-costs.csv
+```
+
+系统自动使用已采集的订单、GMV 和广告花费。若同一天有多条广告记录，
+最小模式会拒绝导入以防成本被错误分摊，应改用完整模板。
+
+## 报告、备份与上线检查
+
+```bash
+.venv/bin/adwatch report weekly --end 2026-07-26
+.venv/bin/adwatch report monthly --month 2026-07
+.venv/bin/adwatch backup create --output var/backups/manual.sqlite3
+.venv/bin/adwatch readiness
+.venv/bin/adwatch launch-checklist --format markdown
+```
+
+`launch-checklist` 会把需要真实账号、真实数据或公网配置才能完成的事项
+集中列出，避免把外部依赖误报成代码缺陷。
+
+## 审批与安全执行
+
+飞书回调需要 `FEISHU_CALLBACK_SECRET` 和公网 HTTPS 地址：
+
+```bash
+.venv/bin/adwatch approval serve --host 127.0.0.1 --port 8787
+```
+
+审批通过后先运行 Shadow。它会读取真实页面并记录预期改动，但不会点击提交：
+
+```bash
+.venv/bin/adwatch execute shadow \
+  --approval-id APPROVAL_ID \
+  --idempotency-key UNIQUE_RUN_ID \
+  --expected-before '{"budget":"100"}'
+```
+
+Live 必须同时满足审批有效、熔断关闭、全局开关开启和
+`platform:store_id:campaign_id` 精确白名单命中。默认配置
+`ADWATCH_LIVE_WRITES=false`，因此不会修改真实广告。
 
 ## 本地看板
 

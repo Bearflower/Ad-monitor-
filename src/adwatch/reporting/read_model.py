@@ -14,7 +14,7 @@ class PlatformSummary:
     gmv: Decimal
     orders: int
     roas: Decimal | None
-    net_profit: Decimal
+    net_profit: Decimal | None
 
 
 @dataclass(frozen=True)
@@ -48,7 +48,9 @@ class ReportReadModel:
                 SELECT m.platform, SUM(CAST(m.spend AS REAL)) spend,
                        SUM(CAST(m.attributed_gmv AS REAL)) gmv,
                        SUM(m.orders) orders,
-                       COALESCE(SUM(CAST(p.net_profit_cny AS REAL)), 0) net_profit
+                       SUM(CAST(p.net_profit_cny AS REAL)) net_profit,
+                       COUNT(p.net_profit_cny) profit_count,
+                       COUNT(m.id) metric_count
                 FROM daily_ad_metrics m
                 LEFT JOIN profit_results p
                   ON p.platform=m.platform AND p.store=m.store
@@ -76,8 +78,12 @@ class ReportReadModel:
                             if spend == 0
                             else (gmv / spend).quantize(Decimal("0.0001"))
                         ),
-                        net_profit=Decimal(str(row["net_profit"])).quantize(
-                            Decimal("0.01")
+                        net_profit=(
+                            None
+                            if row["profit_count"] < row["metric_count"]
+                            else Decimal(str(row["net_profit"])).quantize(
+                                Decimal("0.01")
+                            )
                         ),
                     )
                 )

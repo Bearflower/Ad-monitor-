@@ -17,9 +17,29 @@ def _format_decimal(value: Decimal | None, places: int = 2) -> str:
 
 
 def render_dashboard(
-    database: Database, data_date: date, *, simulated: bool
+    database: Database,
+    data_date: date,
+    *,
+    simulated: bool,
+    platform: str = "",
+    store: str = "",
+    campaign: str = "",
+    sku: str = "",
 ) -> str:
     snapshot = ReportReadModel(database).daily(data_date)
+    platform_items = tuple(
+        item
+        for item in snapshot.platforms
+        if not platform or item.platform == platform
+    )
+    sku_items = tuple(
+        item
+        for item in snapshot.sku_performance
+        if (not platform or item.platform == platform)
+        and (not store or item.store == store)
+        and (not campaign or item.campaign_id == campaign)
+        and (not sku or item.sku_id == sku)
+    )
     cards = "".join(
         f"""
         <article class="card">
@@ -33,7 +53,7 @@ def render_dashboard(
           </dl>
         </article>
         """
-        for item in snapshot.platforms
+        for item in platform_items
     )
     rows = "".join(
         f"""
@@ -46,7 +66,7 @@ def render_dashboard(
           <td class="number">{_format_decimal(item.net_profit)}</td>
         </tr>
         """
-        for item in snapshot.sku_performance
+        for item in sku_items
     )
     alerts = "".join(
         f"<li><strong>{html.escape(item['severity'])}</strong> "
@@ -60,6 +80,7 @@ def render_dashboard(
         for item in snapshot.recommendations
     ) or "<li>当前无策略建议</li>"
     source_badge = "模拟数据" if simulated else "真实数据"
+    scope_label = platform.title() if platform else "TikTok + Shopee"
     return f"""<!doctype html>
 <html lang="zh-CN">
 <head>
@@ -109,9 +130,23 @@ def render_dashboard(
 <body>
   <a class="skip" href="#main">跳到主要内容</a>
   <header><div><h1>投放驾驶舱</h1>
-    <p class="subtitle">{data_date.isoformat()} · TikTok + Shopee</p></div>
+    <p class="subtitle">{data_date.isoformat()} · {scope_label}</p></div>
     <span class="badge">{source_badge}</span></header>
   <main id="main">
+    <form method="get" class="panel" aria-label="筛选">
+      <label>日期 <input name="date" type="date"
+        value="{data_date.isoformat()}"></label>
+      <label>平台 <select name="platform">
+        <option value="">全部</option>
+        <option value="tiktok">TikTok</option>
+        <option value="shopee">Shopee</option>
+      </select></label>
+      <label>店铺 <input name="store" value="{html.escape(store)}"></label>
+      <label>Campaign <input name="campaign"
+        value="{html.escape(campaign)}"></label>
+      <label>SKU <input name="sku" value="{html.escape(sku)}"></label>
+      <button type="submit">筛选</button>
+    </form>
     <section class="grid" aria-label="平台核心指标">{cards}</section>
     <section class="panel"><h2>Campaign 与 SKU 表现</h2>
       <div class="table-wrap"><table><thead><tr><th>平台</th><th>店铺</th>
@@ -158,7 +193,13 @@ def serve(
                 content_type = "application/json; charset=utf-8"
             elif parsed.path == "/":
                 body = render_dashboard(
-                    database, data_date, simulated=simulated
+                    database,
+                    data_date,
+                    simulated=simulated,
+                    platform=parse_qs(parsed.query).get("platform", [""])[0],
+                    store=parse_qs(parsed.query).get("store", [""])[0],
+                    campaign=parse_qs(parsed.query).get("campaign", [""])[0],
+                    sku=parse_qs(parsed.query).get("sku", [""])[0],
                 ).encode("utf-8")
                 content_type = "text/html; charset=utf-8"
             else:

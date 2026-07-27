@@ -30,6 +30,10 @@ class Settings:
     ziniao_shopee_store_id: str = ""
     ziniao_shopee_store_name: str = "Shopee Store"
     feishu_webhook: str = ""
+    feishu_callback_secret: str = ""
+    feishu_callback_public_url: str = ""
+    live_writes: bool = False
+    live_allowlist: frozenset[tuple[str, str, str]] = frozenset()
 
     @classmethod
     def from_env(cls) -> Settings:
@@ -38,6 +42,11 @@ class Settings:
         def value(name: str, default: str = "") -> str:
             return os.getenv(name, dotenv.get(name, default))
 
+        allowlist = frozenset(
+            tuple(item.strip().split(":", 2))
+            for item in value("ADWATCH_LIVE_ALLOWLIST").split(",")
+            if len(item.strip().split(":", 2)) == 3
+        )
         return cls(
             data_dir=Path(value("ADWATCH_DATA_DIR", "var")).expanduser(),
             ziniao_company=value("ZINIAO_COMPANY"),
@@ -53,6 +62,11 @@ class Settings:
                 "ZINIAO_SHOPEE_STORE_NAME", "Shopee Store"
             ),
             feishu_webhook=value("FEISHU_WEBHOOK"),
+            feishu_callback_secret=value("FEISHU_CALLBACK_SECRET"),
+            feishu_callback_public_url=value("FEISHU_CALLBACK_PUBLIC_URL"),
+            live_writes=value("ADWATCH_LIVE_WRITES").lower()
+            in {"1", "true", "yes"},
+            live_allowlist=allowlist,
         )
 
     @property
@@ -78,4 +92,10 @@ class Settings:
     def ziniao_cli_ready(self) -> bool:
         return bool(
             self.ziniao_tiktok_store_id and self.ziniao_shopee_store_id
+        )
+
+    @property
+    def feishu_callback_ready(self) -> bool:
+        return bool(
+            self.feishu_callback_secret and self.feishu_callback_public_url
         )

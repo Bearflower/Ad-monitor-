@@ -9,9 +9,14 @@ def _platform_line(snapshot: DailySnapshot, platform: str) -> str:
     if item is None:
         return "无数据"
     roas = "N/A" if item.roas is None else f"{item.roas:.2f}"
+    profit = (
+        "利润待补数据"
+        if item.net_profit is None
+        else f"净利润(CNY) {item.net_profit:.2f}"
+    )
     return (
         f"消耗 {item.spend:.2f} / GMV {item.gmv:.2f} / "
-        f"ROAS {roas} / 订单 {item.orders} / 净利润(CNY) {item.net_profit:.2f}"
+        f"ROAS {roas} / 订单 {item.orders} / {profit}"
     )
 
 
@@ -61,3 +66,35 @@ def render_weekly_markdown(snapshots: list[DailySnapshot]) -> str:
             for snapshot in snapshots
         ]
     )
+
+
+def render_monthly_markdown(
+    snapshots: list[DailySnapshot], *, month: str
+) -> str:
+    if not snapshots:
+        return f"# 广告月报 {month}\n\n无数据"
+    platform_totals: dict[str, dict[str, object]] = {}
+    for snapshot in snapshots:
+        for item in snapshot.platforms:
+            totals = platform_totals.setdefault(
+                item.platform,
+                {
+                    "spend": 0,
+                    "gmv": 0,
+                    "orders": 0,
+                },
+            )
+            totals["spend"] += item.spend
+            totals["gmv"] += item.gmv
+            totals["orders"] += item.orders
+    lines = [f"# 广告月报 {month}", ""]
+    for platform, totals in sorted(platform_totals.items()):
+        label = platform.capitalize()
+        spend = totals["spend"]
+        gmv = totals["gmv"]
+        roas = "N/A" if not spend else f"{gmv / spend:.2f}"
+        lines.append(
+            f"- {label}: 消耗 {spend:.2f} / GMV {gmv:.2f} / "
+            f"ROAS {roas} / 订单 {totals['orders']}"
+        )
+    return "\n".join(lines)

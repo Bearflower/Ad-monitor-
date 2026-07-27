@@ -32,3 +32,23 @@ def test_dashboard_is_read_only_responsive_and_escapes_data(tmp_path):
     assert "TikTok" in html and "Shopee" in html
     assert "净利润" in html and "策略建议" in html
     assert '<meta name="viewport"' in html
+
+
+def test_dashboard_filters_platform_and_exposes_filter_controls(tmp_path):
+    data_date = date(2026, 7, 22)
+    database = Database(tmp_path / "test.sqlite3")
+    database.migrate()
+    runner = PipelineRunner(database)
+    runner.run(MockCollector(Platform.TIKTOK), data_date)
+    runner.run(MockCollector(Platform.SHOPEE), data_date)
+
+    html = render_dashboard(
+        database,
+        data_date,
+        simulated=True,
+        platform="shopee",
+    )
+
+    assert 'name="platform"' in html
+    assert "Shopee" in html
+    assert 'class="eyebrow">Tiktok' not in html

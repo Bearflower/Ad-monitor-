@@ -115,3 +115,44 @@ def test_executor_permanently_blocks_budget_increase_above_fifty_percent(
             idempotency_key="large-increase",
             expected_before={"budget": "100"},
         )
+
+
+def test_executor_rolls_back_and_audits_failed_write(tmp_path):
+    class FailingBackend(FakeBackend):
+        def __init__(self):
+            super().__init__()
+            self.rolled_back = False
+
+        def execute(self, recommendation):
+            self.current = {"budget": "70"}
+            raise RuntimeError("write verification failed")
+
+        def rollback(self, recommendation, before):
+            self.current = dict(before)
+            self.rolled_back = True
+            return dict(self.current)
+
+    database = Database(tmp_path / "test.sqlite3")
+    database.migrate()
+    backend = FailingBackend()
+    executor = SafeExecutor(database, backend)
+
+    result = executor.execute(
+        _approved(database),
+        idempotency_key="rollback-operation",
+        expected_before={"budget": "100"},
+    )
+
+    assert result.status == "rolled_back"
+    assert backend.rolled_back is True
+    with database.connect() as connection:
+        audit = connection.execute(
+            """
+            SELECT status, error_code FROM execution_audits
+            WHERE idempotency_key='rollback-operation'
+            """
+        ).fetchone()
+    assert dict(audit) == {
+        "status": "rolled_back",
+        "error_code": "RuntimeError",
+    }

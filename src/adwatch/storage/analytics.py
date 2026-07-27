@@ -131,6 +131,115 @@ class AnalyticsRepository:
                 (data_date.isoformat(),),
             ).fetchall()
 
+    def baseline_for(self, row: sqlite3.Row, data_date: date) -> sqlite3.Row | None:
+        with self.database.connect() as connection:
+            return connection.execute(
+                """
+                SELECT AVG(CAST(spend AS REAL)) AS spend,
+                       CASE WHEN SUM(CAST(spend AS REAL)) = 0 THEN NULL
+                            ELSE SUM(CAST(attributed_gmv AS REAL))
+                                 / SUM(CAST(spend AS REAL))
+                       END AS roas
+                FROM daily_ad_metrics
+                WHERE platform=? AND store=? AND account_id=?
+                  AND campaign_id=? AND sku_id=?
+                  AND data_date BETWEEN date(?, '-7 days') AND date(?, '-1 day')
+                """,
+                (
+                    row["platform"],
+                    row["store"],
+                    row["account_id"],
+                    row["campaign_id"],
+                    row["sku_id"],
+                    data_date.isoformat(),
+                    data_date.isoformat(),
+                ),
+            ).fetchone()
+
+    def recent_webdriver_failures(self, limit: int = 3) -> int:
+        with self.database.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT status FROM collection_runs
+                WHERE mode='ziniao'
+                ORDER BY started_at DESC LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+        return sum(1 for row in rows if row["status"] == "failed")
+
+    def consecutive_global_low_roas_days(
+        self, data_date: date, limit: int = 2
+    ) -> int:
+        with self.database.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT metric.data_date,
+                       COUNT(*) AS total_count,
+                       SUM(
+                           CASE WHEN CAST(metric.roas AS REAL)
+                                      < CAST(campaign.target_roas AS REAL) * 0.60
+                                THEN 1 ELSE 0 END
+                       ) AS low_count
+                FROM daily_ad_metrics AS metric
+                JOIN campaign_settings AS campaign
+                  ON campaign.platform=metric.platform
+                 AND campaign.campaign_id=metric.campaign_id
+                WHERE metric.data_date <= ?
+                GROUP BY metric.data_date
+                ORDER BY metric.data_date DESC
+                LIMIT ?
+                """,
+                (data_date.isoformat(), limit),
+            ).fetchall()
+        count = 0
+        expected = data_date
+        for row in rows:
+            if date.fromisoformat(row["data_date"]) != expected:
+                break
+            if row["total_count"] == 0 or row["low_count"] != row["total_count"]:
+                break
+            count += 1
+            expected = date.fromordinal(expected.toordinal() - 1)
+        return count
+
+    def consecutive_campaign_low_days(
+        self, row: sqlite3.Row, data_date: date
+    ) -> int:
+        target = row["target_roas"]
+        if target is None:
+            return 0
+        with self.database.connect() as connection:
+            history = connection.execute(
+                """
+                SELECT data_date, roas
+                FROM daily_ad_metrics
+                WHERE platform=? AND store=? AND account_id=?
+                  AND campaign_id=? AND sku_id=? AND data_date<=?
+                ORDER BY data_date DESC
+                LIMIT 30
+                """,
+                (
+                    row["platform"],
+                    row["store"],
+                    row["account_id"],
+                    row["campaign_id"],
+                    row["sku_id"],
+                    data_date.isoformat(),
+                ),
+            ).fetchall()
+        count = 0
+        expected = data_date
+        threshold = Decimal(target) * Decimal("0.50")
+        for point in history:
+            if date.fromisoformat(point["data_date"]) != expected:
+                break
+            if point["roas"] is None or Decimal(point["roas"]) >= threshold:
+                break
+            count += 1
+            expected = date.fromordinal(expected.toordinal() - 1)
+        return count
+
     @staticmethod
     def decimal(row: sqlite3.Row, key: str) -> Decimal | None:
         value = row[key]

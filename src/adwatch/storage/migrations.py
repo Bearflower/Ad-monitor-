@@ -236,4 +236,22 @@ MIGRATIONS = [
         );
         """,
     ),
+    (
+        4,
+        """
+        CREATE TABLE callback_events (
+            event_id TEXT PRIMARY KEY,
+            received_at TEXT NOT NULL DEFAULT (
+                strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+            )
+        );
+        """,
+    ),
+    (
+        5,
+        """
+        ALTER TABLE recommendations
+        ADD COLUMN store_id TEXT NOT NULL DEFAULT '';
+        """,
+    ),
 ]

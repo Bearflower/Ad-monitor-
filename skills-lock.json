@@ -1,0 +1,143 @@
+{
+  "version": 1,
+  "skills": {
+    "ads-tiktok": {
+      "source": "agricidaniel/claude-ads",
+      "sourceType": "github",
+      "skillPath": "skills/ads-tiktok/SKILL.md",
+      "computedHash": "b3843f881e8a96405fa9db48a9545c33d14f72fdf2ee66b6358ce8ea59a44494"
+    },
+    "attribution-reconciler": {
+      "source": "aaron-he-zhu/aaron-marketing-skills",
+      "sourceType": "github",
+      "skillPath": "ad/scale/attribution-reconciler/SKILL.md",
+      "computedHash": "ab45ad2afdacc80eed1fb6601850dd1172841bc483d0a9970f3a354b7f09fb27"
+    },
+    "campaign-analytics": {
+      "source": "borghei/claude-skills",
+      "sourceType": "github",
+      "skillPath": "marketing/campaign-analytics/SKILL.md",
+      "computedHash": "ce8c8c9b3c647120883bbbbca029229a80ffb98e90d2a33c158dffd103356ef2"
+    },
+    "cloud": {
+      "source": "browser-use/browser-use",
+      "sourceType": "github",
+      "skillPath": "skills/cloud/SKILL.md",
+      "computedHash": "b8d447a793468bb3d832239cf99872b6d21538f388ecafaedf9ea1aff78a9aca"
+    },
+    "cro": {
+      "source": "coreyhaines31/marketingskills",
+      "sourceType": "github",
+      "skillPath": "skills/cro/SKILL.md",
+      "computedHash": "07f7a27c57e48f4b67230712f8efbc5bcc01611b35321b3c2c2e5279c9304bcd"
+    },
+    "exploratory-data-analysis": {
+      "source": "davila7/claude-code-templates",
+      "sourceType": "github",
+      "skillPath": "cli-tool/components/skills/scientific/exploratory-data-analysis/SKILL.md",
+      "computedHash": "0567655b147076fe3d85429c081bd2a06b427c01a6ae72f0606a2586b940d381"
+    },
+    "marketing-analyst": {
+      "source": "borghei/claude-skills",
+      "sourceType": "github",
+      "skillPath": "marketing/marketing-analyst/SKILL.md",
+      "computedHash": "0e5d29dc08711f79758b805d78a4b9eb7b83923082f58cb5715093c7ec455bc1"
+    },
+    "marketing-spend-analysis": {
+      "source": "finsilabs/awesome-ecommerce-skills",
+      "sourceType": "github",
+      "skillPath": "skills/data-analytics/marketing-spend-analysis/SKILL.md",
+      "computedHash": "8f2c11a1248aedfa86e1fb09853599e0282e2f9cb6e977788520e032e43dce8d"
+    },
+    "minimax-docx": {
+      "source": "minimax-ai/skills",
+      "sourceType": "github",
+      "skillPath": "skills/minimax-docx/SKILL.md",
+      "computedHash": "871a00d2af2f55a2101a5f0235ec4b76f7cff13e063c492e5b6ecdf05da1ff7a"
+    },
+    "time-series-analysis": {
+      "source": "nimrodfisher/data-analytics-skills",
+      "sourceType": "github",
+      "skillPath": "03-data-analysis-investigation/time-series-analysis/SKILL.md",
+      "computedHash": "e9473c0769dfc1a36dc2e80681e9b12dec372d22b5b1bf41d23327d8cc7ecd86"
+    },
+    "ziniao-access-policy": {
+      "source": "ziniao-open/skills",
+      "sourceType": "github",
+      "skillPath": "skills/ziniao-access-policy/SKILL.md",
+      "computedHash": "58b7b8e0c88668e6b7f2ac91078e22900f10f570b86634771e549575193c591a"
+    },
+    "ziniao-account": {
+      "source": "ziniao-open/skills",
+      "sourceType": "github",
+      "skillPath": "skills/ziniao-account/SKILL.md",
+      "computedHash": "972d5453511680d49aef41293378e4ad5124a75cd7786d7c525b211feab97dd1"
+    },
+    "ziniao-department": {
+      "source": "ziniao-open/skills",
+      "sourceType": "github",
+      "skillPath": "skills/ziniao-department/SKILL.md",
+      "computedHash": "4aae4cb7b70fb25d19eef3a927e12cc2e952272fce62cd2519fd5731add9fcf2"
+    },
+    "ziniao-device": {
+      "source": "ziniao-open/skills",
+      "sourceType": "github",
+      "skillPath": "skills/ziniao-device/SKILL.md",
+      "computedHash": "8b7a078e61277cdc5987e470d98956c838b9110e2f4168ec7d2c9c1f4c799427"
+    },
+    "ziniao-openapi-explorer": {
+      "source": "ziniao-open/skills",
+      "sourceType": "github",
+      "skillPath": "skills/ziniao-openapi-explorer/SKILL.md",
+      "computedHash": "0e6f7c638f9ae79ac87e7bda41f27030fa8a30d81e73c9dcea2b3ab2e1a618af"
+    },
+    "ziniao-page": {
+      "source": "ziniao-open/skills",
+      "sourceType": "github",
+      "skillPath": "skills/ziniao-page/SKILL.md",
+      "computedHash": "8130764637cdedbe41b94f75215c8d160c12d406d4d6a03d5dcc0c25679772d3"
+    },
+    "ziniao-role": {
+      "source": "ziniao-open/skills",
+      "sourceType": "github",
+      "skillPath": "skills/ziniao-role/SKILL.md",
+      "computedHash": "ca72ef8c7b91c39404560193345a224842e92334383d47829d9f981cc5b4c046"
+    },
+    "ziniao-shared": {
+      "source": "ziniao-open/skills",
+      "sourceType": "github",
+      "skillPath": "skills/ziniao-shared/SKILL.md",
+      "computedHash": "e764e337a71340af4bba0d253f34813b2dd36466acdfe85f868455e7ebe26ba9"
+    },
+    "ziniao-skill-maker": {
+      "source": "ziniao-open/skills",
+      "sourceType": "github",
+      "skillPath": "skills/ziniao-skill-maker/SKILL.md",
+      "computedHash": "f83372cde5af34189c53ade3aef9f6d08a4e2375a185de6e75c0ad66a9061711"
+    },
+    "ziniao-staff": {
+      "source": "ziniao-open/skills",
+      "sourceType": "github",
+      "skillPath": "skills/ziniao-staff/SKILL.md",
+      "computedHash": "8690f0228fe263732cceaccd0f3555247315b67b0ab578242acd8c9294d881fd"
+    },
+    "ziniao-store": {
+      "source": "ziniao-open/skills",
+      "sourceType": "github",
+      "skillPath": "skills/ziniao-store/SKILL.md",
+      "computedHash": "afd7e396e2c91b09222e44271f669ca3f62fd2dd3a703d0cd9bad5d98eb44769"
+    },
+    "ziniao-workflow-batch-account": {
+      "source": "ziniao-open/skills",
+      "sourceType": "github",
+      "skillPath": "skills/ziniao-workflow-batch-account/SKILL.md",
+      "computedHash": "65b68e29eb92108a10185ed7036b1f21d0c167ce2c1f6fd55518cee45e866607"
+    },
+    "ziniao-workflow-store-patrol": {
+      "source": "ziniao-open/skills",
+      "sourceType": "github",
+      "skillPath": "skills/ziniao-workflow-store-patrol/SKILL.md",
+      "computedHash": "1e2eb7063269dfacc1c9efa897fbb5ac57310b273f1b269f4481dbd582b1e556"
+    }
+  }
+}

@@ -77,6 +77,37 @@ def parse_shopee_campaign_summary(
     )
 
 
+def parse_tiktok_campaign_rows(
+    rows: list[dict[str, object]],
+    *,
+    store: str,
+    account_id: str,
+    data_date: date,
+) -> list[DailyAdMetric]:
+    metrics = []
+    for row in rows:
+        campaign_id = str(row.get("campaign_id", "")).strip()
+        if not campaign_id:
+            continue
+        product_id = str(row.get("product_id", "")).strip() or "__ALL__"
+        metrics.append(
+            DailyAdMetric(
+                platform=Platform.TIKTOK,
+                store=store,
+                account_id=account_id,
+                campaign_id=campaign_id,
+                sku_id=product_id,
+                data_date=data_date,
+                currency=str(row.get("currency", "THB")).strip() or "THB",
+                spend=_primary_decimal(str(row.get("spend", "0"))),
+                attributed_gmv=_primary_decimal(str(row.get("gmv", "0"))),
+                orders=int(_primary_decimal(str(row.get("orders", "0")))),
+                source="ziniao-cli",
+            )
+        )
+    return metrics
+
+
 class ZiniaoCollector:
     source = "ziniao"
 
@@ -101,12 +132,17 @@ class ZiniaoCollector:
             result = self.cli_client.navigate_and_exec(
                 store_id,
                 "https://seller-th.tiktok.com/ads-creation/dashboard",
-                "JSON.stringify([])",
+                TIKTOK_PAGE_SCRIPT,
                 expected_url="/ads-creation/dashboard",
             )
             if not isinstance(result, list):
                 raise ValueError("TikTok Ads page returned an invalid result")
-            return []
+            return parse_tiktok_campaign_rows(
+                result,
+                store=self.settings.ziniao_tiktok_store_name,
+                account_id=store_id,
+                data_date=data_date,
+            )
 
         start, end = _thailand_day_timestamps(data_date)
         expected = f"from={start}&to={end}"
@@ -228,4 +264,31 @@ SHOPEE_NEXT_PAGE_SCRIPT = r"""
   button.click();
   return "clicked";
 })()
+""".strip()
+
+
+TIKTOK_PAGE_SCRIPT = r"""
+JSON.stringify((()=>{
+  const rows=Array.from(document.querySelectorAll("table tbody tr"));
+  return rows.map(row=>{
+    const cells=Array.from(row.querySelectorAll("td")).map(cell=>
+      (cell.innerText||cell.textContent||"").trim().replace(/\s+/g," ")
+    );
+    const text=cells.join(" ");
+    const id=text.match(/(?:Campaign\s*ID|ID)\s*[:：]\s*(\d+)/i);
+    if(!id)return null;
+    const money=cells.filter(value=>/[฿$¥]|(?:THB|USD|CNY)/i.test(value));
+    const orders=cells.find(value=>/^\d+$/.test(value.replace(/,/g,"")));
+    const product=text.match(/(?:Product\s*ID|商品ID)\s*[:：]\s*(\d+)/i);
+    return {
+      campaign_id:id[1],
+      campaign:cells[0]||id[1],
+      product_id:product?product[1]:"",
+      spend:money[0]||"0",
+      gmv:money[1]||"0",
+      orders:orders||"0",
+      currency:/USD/i.test(text)?"USD":(/CNY|¥/.test(text)?"CNY":"THB")
+    };
+  }).filter(Boolean);
+})())
 """.strip()

@@ -8,6 +8,7 @@ from adwatch.analytics.business_inputs import (
     BusinessInputError,
     export_business_template,
     import_business_inputs,
+    import_minimal_business_inputs,
 )
 from adwatch.analytics.service import AnalysisService
 from adwatch.domain import DailyAdMetric, Platform
@@ -117,3 +118,58 @@ def test_import_rejects_incomplete_rows_without_partial_writes(tmp_path):
 
     with pytest.raises(BusinessInputError, match="missing columns"):
         import_business_inputs(database, source)
+
+
+def test_minimal_business_input_maps_unique_metric_for_date(tmp_path):
+    database = _database(tmp_path)
+    source = tmp_path / "minimal.csv"
+    source.write_text(
+        "data_date,total_product_cost,refund_amount\n"
+        "2026-07-23,120,0\n",
+        encoding="utf-8",
+    )
+
+    assert import_minimal_business_inputs(database, source) == 1
+
+    with database.connect() as connection:
+        row = connection.execute(
+            """
+            SELECT product_cost, refund_amount, commission_rate
+            FROM product_costs
+            WHERE sku_id='__ALL__' AND effective_date='2026-07-23'
+            """
+        ).fetchone()
+    assert dict(row) == {
+        "product_cost": "120",
+        "refund_amount": "0",
+        "commission_rate": "0",
+    }
+
+
+def test_minimal_business_input_rejects_ambiguous_date(tmp_path):
+    database = _database(tmp_path)
+    PipelineRunner(database).run(
+        OneMetricCollector(), date(2026, 7, 23)
+    )
+    with database.transaction() as connection:
+        connection.execute(
+            """
+            INSERT INTO daily_ad_metrics(
+                platform, store, account_id, campaign_id, sku_id, data_date,
+                currency, spend, attributed_gmv, orders, roas, cpa, source
+            )
+            SELECT platform, store, account_id, 'Second Campaign', 'second',
+                   data_date, currency, spend, attributed_gmv, orders,
+                   roas, cpa, source
+            FROM daily_ad_metrics WHERE data_date='2026-07-23' LIMIT 1
+            """
+        )
+    source = tmp_path / "minimal.csv"
+    source.write_text(
+        "data_date,total_product_cost,refund_amount\n"
+        "2026-07-23,120,0\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(BusinessInputError, match="matches 2 metric rows"):
+        import_minimal_business_inputs(database, source)
