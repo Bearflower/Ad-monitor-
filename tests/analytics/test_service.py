@@ -281,3 +281,38 @@ def test_three_real_low_days_feed_pause_strategy(tmp_path):
             )
         ]
     assert recommendations == [("pause", "account")]
+
+
+def test_verified_retest_candidate_is_persisted_with_capped_amount(tmp_path):
+    data_date = date(2026, 7, 23)
+    database = Database(tmp_path / "test.sqlite3")
+    database.migrate()
+    PipelineRunner(database).run(MockCollector(Platform.SHOPEE), data_date)
+    service = AnalysisService(database)
+    service.seed_mock_business_data(data_date)
+    with database.transaction() as connection:
+        connection.execute(
+            """
+            INSERT INTO product_retest_candidates(
+                platform, campaign_id, sku_id, available_test_budget, enabled
+            ) VALUES ('shopee', 'shopee-campaign-1', 'SKU-001', '300', 1)
+            """
+        )
+        connection.execute(
+            """
+            UPDATE campaign_settings
+            SET current_budget='1000', baseline_budget='1000'
+            WHERE platform='shopee' AND campaign_id='shopee-campaign-1'
+            """
+        )
+
+    service.run(data_date)
+
+    with database.connect() as connection:
+        row = connection.execute(
+            """
+            SELECT action, amount FROM recommendations
+            WHERE rule_code='allocate_product_retest'
+            """
+        ).fetchone()
+    assert tuple(row) == ("allocate_retest", "200.00")

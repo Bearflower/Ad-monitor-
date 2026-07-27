@@ -70,3 +70,32 @@ def test_roas_above_one_fifty_percent_recommends_higher_target():
     assert [(item.action, item.change_ratio) for item in result] == [
         ("adjust_roas_target", Decimal("0.20"))
     ]
+
+
+def test_product_retest_is_capped_at_twenty_percent():
+    context = StrategyContext.example(
+        retest_candidate=True,
+        verified_profit=True,
+        inventory_verified=True,
+        available_test_budget=Decimal("300"),
+        current_budget=Decimal("1000"),
+        roas=Decimal("1"),
+        target_roas=Decimal("2"),
+    )
+
+    retest = next(
+        item for item in recommend(context) if item.action == "allocate_retest"
+    )
+
+    assert retest.amount == Decimal("200")
+    assert retest.amount <= context.current_budget * Decimal("0.20")
+
+
+def test_product_retest_requires_verified_profit_and_inventory():
+    context = StrategyContext.example(
+        retest_candidate=True,
+        verified_profit=False,
+        inventory_verified=False,
+    )
+
+    assert all(item.action != "allocate_retest" for item in recommend(context))

@@ -106,7 +106,9 @@ class AnalyticsRepository:
                     campaign.start_date,
                     campaign.target_roas,
                     campaign.current_budget,
-                    campaign.baseline_budget
+                    campaign.baseline_budget,
+                    retest.available_test_budget,
+                    COALESCE(retest.enabled, 0) AS retest_candidate
                 FROM daily_ad_metrics AS metric
                 LEFT JOIN product_costs AS cost
                     ON cost.sku_id = metric.sku_id
@@ -125,6 +127,10 @@ class AnalyticsRepository:
                 LEFT JOIN campaign_settings AS campaign
                     ON campaign.platform = metric.platform
                     AND campaign.campaign_id = metric.campaign_id
+                LEFT JOIN product_retest_candidates AS retest
+                    ON retest.platform = metric.platform
+                    AND retest.campaign_id = metric.campaign_id
+                    AND retest.sku_id = metric.sku_id
                 WHERE metric.data_date = ?
                 ORDER BY metric.platform, metric.campaign_id, metric.sku_id
                 """,

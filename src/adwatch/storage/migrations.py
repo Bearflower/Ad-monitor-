@@ -254,4 +254,20 @@ MIGRATIONS = [
         ADD COLUMN store_id TEXT NOT NULL DEFAULT '';
         """,
     ),
+    (
+        6,
+        """
+        CREATE TABLE product_retest_candidates (
+            platform TEXT NOT NULL,
+            campaign_id TEXT NOT NULL,
+            sku_id TEXT NOT NULL,
+            available_test_budget TEXT NOT NULL,
+            enabled INTEGER NOT NULL DEFAULT 1,
+            PRIMARY KEY(platform, campaign_id, sku_id)
+        );
+
+        ALTER TABLE recommendations
+        ADD COLUMN amount TEXT;
+        """,
+    ),
 ]

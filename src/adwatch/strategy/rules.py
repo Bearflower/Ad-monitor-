@@ -15,6 +15,10 @@ class StrategyContext:
     inventory_cover_days: Decimal
     current_budget: Decimal
     baseline_budget: Decimal
+    retest_candidate: bool = False
+    verified_profit: bool = False
+    inventory_verified: bool = False
+    available_test_budget: Decimal = Decimal(0)
 
     @classmethod
     def example(cls, **overrides: object) -> "StrategyContext":
@@ -40,6 +44,7 @@ class Recommendation:
     change_ratio: Decimal | None
     reason: str
     requires_approval: bool = True
+    amount: Decimal | None = None
 
 
 def recommend(context: StrategyContext) -> tuple[Recommendation, ...]:
@@ -48,13 +53,39 @@ def recommend(context: StrategyContext) -> tuple[Recommendation, ...]:
     if age_days < learning_days:
         return ()
 
+    retest_recommendations: tuple[Recommendation, ...] = ()
+    if (
+        context.retest_candidate
+        and context.verified_profit
+        and context.inventory_verified
+        and context.available_test_budget > 0
+        and context.current_budget > 0
+    ):
+        amount = min(
+            context.available_test_budget,
+            context.current_budget * Decimal("0.20"),
+        )
+        if amount > 0:
+            retest_recommendations = (
+                Recommendation(
+                    rule_code="allocate_product_retest",
+                    action="allocate_retest",
+                    change_ratio=None,
+                    amount=amount,
+                    reason=(
+                        "Verified product candidate uses no more than "
+                        "20% of the budget pool"
+                    ),
+                ),
+            )
+
     target_ratio = (
         context.roas / context.target_roas
         if context.target_roas > 0
         else Decimal("0")
     )
     if target_ratio < Decimal("0.50") and context.consecutive_low_days >= 3:
-        return (
+        return retest_recommendations + (
             Recommendation(
                 rule_code="pause_sustained_low_roas",
                 action="pause",
@@ -63,7 +94,7 @@ def recommend(context: StrategyContext) -> tuple[Recommendation, ...]:
             ),
         )
     if target_ratio < Decimal("0.70"):
-        return (
+        return retest_recommendations + (
             Recommendation(
                 rule_code="reduce_budget_low_roas",
                 action="reduce_budget",
@@ -72,7 +103,7 @@ def recommend(context: StrategyContext) -> tuple[Recommendation, ...]:
             ),
         )
     if target_ratio < Decimal("0.80"):
-        return (
+        return retest_recommendations + (
             Recommendation(
                 rule_code="lower_roas_target",
                 action="adjust_roas_target",
@@ -81,7 +112,7 @@ def recommend(context: StrategyContext) -> tuple[Recommendation, ...]:
             ),
         )
     if target_ratio > Decimal("1.50"):
-        return (
+        return retest_recommendations + (
             Recommendation(
                 rule_code="raise_roas_target",
                 action="adjust_roas_target",
@@ -100,7 +131,7 @@ def recommend(context: StrategyContext) -> tuple[Recommendation, ...]:
         ) - Decimal("1")
         change_ratio = min(Decimal("0.30"), maximum_ratio)
         if change_ratio > 0:
-            return (
+            return retest_recommendations + (
                 Recommendation(
                     rule_code="increase_budget_profitable",
                     action="increase_budget",
@@ -108,4 +139,4 @@ def recommend(context: StrategyContext) -> tuple[Recommendation, ...]:
                     reason="ROAS is on target with profit and sufficient stock",
                 ),
             )
-    return ()
+    return retest_recommendations

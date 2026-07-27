@@ -149,6 +149,12 @@ class AnalysisService:
                     inventory_cover_days=inventory_cover,
                     current_budget=Decimal(row["current_budget"]),
                     baseline_budget=Decimal(row["baseline_budget"]),
+                    retest_candidate=bool(row["retest_candidate"]),
+                    verified_profit=True,
+                    inventory_verified=True,
+                    available_test_budget=Decimal(
+                        row["available_test_budget"] or "0"
+                    ),
                 )
                 for item in recommend(context):
                     connection.execute(
@@ -156,8 +162,8 @@ class AnalysisService:
                         INSERT INTO recommendations(
                             rule_code, platform, campaign_id, sku_id, data_date,
                             action, change_ratio, reason, requires_approval,
-                            store_id
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            store_id, amount
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         ON CONFLICT(
                             rule_code, platform, campaign_id, sku_id, data_date
                         ) DO UPDATE SET
@@ -166,6 +172,7 @@ class AnalysisService:
                             reason=excluded.reason,
                             requires_approval=excluded.requires_approval,
                             store_id=excluded.store_id,
+                            amount=excluded.amount,
                             updated_at=strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
                         """,
                         (
@@ -183,6 +190,11 @@ class AnalysisService:
                             item.reason,
                             int(item.requires_approval),
                             row["account_id"],
+                            (
+                                None
+                                if item.amount is None
+                                else f"{item.amount:.2f}"
+                            ),
                         ),
                     )
                     recommendation_count += 1
