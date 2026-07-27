@@ -18,9 +18,12 @@ def create_backup(database: Database, destination: Path) -> Path:
 
 
 def verify_backup(path: Path) -> str:
-    connection = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
     try:
-        result = connection.execute("PRAGMA integrity_check").fetchone()[0]
-    finally:
-        connection.close()
-    return str(result)
+        connection = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+        try:
+            result = connection.execute("PRAGMA integrity_check").fetchone()[0]
+        finally:
+            connection.close()
+        return str(result)
+    except sqlite3.DatabaseError:
+        return "invalid"

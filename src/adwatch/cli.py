@@ -60,6 +60,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     report = subcommands.add_parser("report")
     report_commands = report.add_subparsers(dest="report_command")
+    daily_report = report_commands.add_parser("daily")
+    daily_report.add_argument("--date", type=date.fromisoformat, required=True)
     monthly = report_commands.add_parser("monthly")
     monthly.add_argument("--month", required=True)
     weekly = report_commands.add_parser("weekly")
@@ -68,6 +70,8 @@ def build_parser() -> argparse.ArgumentParser:
     backup_commands = backup.add_subparsers(dest="backup_command")
     backup_create = backup_commands.add_parser("create")
     backup_create.add_argument("--output", type=Path, required=True)
+    backup_verify = backup_commands.add_parser("verify")
+    backup_verify.add_argument("--path", type=Path, required=True)
     approval = subcommands.add_parser("approval")
     approval_commands = approval.add_subparsers(dest="approval_command")
     approval_serve = approval_commands.add_parser("serve")
@@ -281,6 +285,18 @@ def main(argv: list[str] | None = None) -> int:
         return 0 if result.status in {"succeeded", "rolled_back"} else 2
     if args.command == "report":
         database.migrate()
+        if args.report_command == "daily":
+            markdown = render_daily_markdown(
+                ReportReadModel(database).daily(args.date),
+                simulated=False,
+            )
+            destination = (
+                settings.report_dir / f"daily-{args.date.isoformat()}.md"
+            )
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_text(markdown, encoding="utf-8")
+            print(f"Daily report: {destination}")
+            return 0
         if args.report_command == "monthly":
             try:
                 year_text, month_text = args.month.split("-", 1)
@@ -327,6 +343,16 @@ def main(argv: list[str] | None = None) -> int:
             integrity = verify_backup(destination)
             print(f"Backup: {destination} integrity={integrity}")
             return 0 if integrity == "ok" else 2
+        if args.backup_command == "verify":
+            integrity = verify_backup(args.path)
+            if integrity != "ok":
+                print(
+                    f"Backup verification failed: "
+                    f"{args.path} integrity={integrity}"
+                )
+                return 2
+            print(f"Backup verified: {args.path} integrity=ok")
+            return 0
         parser.print_help()
         return 2
     if args.command == "seed-business-data":

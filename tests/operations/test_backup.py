@@ -11,3 +11,10 @@ def test_sqlite_backup_is_created_and_passes_integrity_check(tmp_path):
 
     assert destination.exists()
     assert verify_backup(destination) == "ok"
+
+
+def test_corrupt_backup_reports_invalid_instead_of_crashing(tmp_path):
+    destination = tmp_path / "broken.sqlite3"
+    destination.write_bytes(b"not sqlite")
+
+    assert verify_backup(destination) == "invalid"

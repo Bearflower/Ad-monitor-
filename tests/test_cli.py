@@ -137,6 +137,32 @@ def test_weekly_report_cli_writes_local_file(tmp_path, monkeypatch):
     assert "# 广告周报" in path.read_text()
 
 
+def test_daily_report_cli_writes_local_file(tmp_path, monkeypatch, capsys):
+    settings = Settings(data_dir=tmp_path)
+    monkeypatch.setattr(adwatch.cli.Settings, "from_env", lambda: settings)
+    assert main(["init"]) == 0
+
+    assert main(["report", "daily", "--date", "2026-07-26"]) == 0
+
+    path = tmp_path / "reports" / "daily-2026-07-26.md"
+    assert path.exists()
+    assert "# 广告每日快报 2026-07-26" in path.read_text()
+    assert str(path) in capsys.readouterr().out
+
+
+def test_backup_verify_cli_rejects_corrupt_database(
+    tmp_path, monkeypatch, capsys
+):
+    settings = Settings(data_dir=tmp_path)
+    monkeypatch.setattr(adwatch.cli.Settings, "from_env", lambda: settings)
+    path = tmp_path / "broken.sqlite3"
+    path.write_bytes(b"not sqlite")
+
+    assert main(["backup", "verify", "--path", str(path)]) == 2
+
+    assert "verification failed" in capsys.readouterr().out.lower()
+
+
 def test_live_execution_cli_refuses_before_page_access(
     tmp_path, monkeypatch, capsys
 ):
