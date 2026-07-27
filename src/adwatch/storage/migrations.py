@@ -289,4 +289,34 @@ MIGRATIONS = [
         );
         """,
     ),
+    (
+        8,
+        """
+        CREATE TABLE order_cost_lines (
+            platform TEXT NOT NULL,
+            store TEXT NOT NULL,
+            order_id TEXT NOT NULL,
+            sku_id TEXT NOT NULL,
+            order_date TEXT NOT NULL,
+            quantity INTEGER NOT NULL CHECK(quantity > 0),
+            unit_cost_cny TEXT NOT NULL,
+            line_cost_cny TEXT NOT NULL,
+            source_file TEXT NOT NULL,
+            updated_at TEXT NOT NULL DEFAULT (
+                strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+            ),
+            PRIMARY KEY(platform, store, order_id, sku_id)
+        );
+
+        CREATE INDEX order_cost_lines_daily_idx
+        ON order_cost_lines(platform, store, order_date);
+
+        CREATE TABLE store_aliases (
+            platform TEXT NOT NULL,
+            source_store TEXT NOT NULL,
+            canonical_store TEXT NOT NULL,
+            PRIMARY KEY(platform, source_store)
+        );
+        """,
+    ),
 ]
