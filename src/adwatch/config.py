@@ -32,6 +32,8 @@ class Settings:
     feishu_webhook: str = ""
     feishu_callback_secret: str = ""
     feishu_callback_public_url: str = ""
+    tiktok_api_oauth: str = ""
+    shopee_api_oauth: str = ""
     live_writes: bool = False
     live_allowlist: frozenset[tuple[str, str, str]] = frozenset()
 
@@ -64,6 +66,8 @@ class Settings:
             feishu_webhook=value("FEISHU_WEBHOOK"),
             feishu_callback_secret=value("FEISHU_CALLBACK_SECRET"),
             feishu_callback_public_url=value("FEISHU_CALLBACK_PUBLIC_URL"),
+            tiktok_api_oauth=value("TIKTOK_API_OAUTH"),
+            shopee_api_oauth=value("SHOPEE_API_OAUTH"),
             live_writes=value("ADWATCH_LIVE_WRITES").lower()
             in {"1", "true", "yes"},
             live_allowlist=allowlist,
@@ -99,3 +103,7 @@ class Settings:
         return bool(
             self.feishu_callback_secret and self.feishu_callback_public_url
         )
+
+    @property
+    def platform_api_oauth_ready(self) -> bool:
+        return bool(self.tiktok_api_oauth and self.shopee_api_oauth)

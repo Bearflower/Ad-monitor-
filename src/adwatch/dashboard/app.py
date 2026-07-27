@@ -155,14 +155,19 @@ def render_dashboard(
     h2 span {{ font:500 .8rem/1 sans-serif; color:var(--muted); }}
     dl {{ display:grid; grid-template-columns:repeat(2,1fr); gap:12px; margin:0; }}
     dl div {{ border-top:1px solid var(--border); padding-top:8px; }}
-    dt {{ color:var(--muted); font-size:.8rem; }} dd {{ margin:0; font-variant-numeric:tabular-nums; }}
+    dt {{ color:var(--muted); font-size:.8rem; }}
+    dd {{ margin:0; font-variant-numeric:tabular-nums; }}
     .panel {{ margin-top:16px; padding:20px; overflow:hidden; }}
     .panel h2 {{ font:700 1.15rem/1.3 sans-serif; margin:0 0 16px; }}
-    .table-wrap {{ overflow:auto; }} table {{ width:100%; border-collapse:collapse; min-width:720px; }}
-    th,td {{ padding:10px 12px; text-align:left; border-bottom:1px solid var(--border); }}
+    .table-wrap {{ overflow:auto; }}
+    table {{ width:100%; border-collapse:collapse; min-width:720px; }}
+    th,td {{ padding:10px 12px; text-align:left;
+      border-bottom:1px solid var(--border); }}
     th {{ color:var(--muted); font-size:.78rem; text-transform:uppercase; }}
-    tbody tr:hover {{ background:#eff6ff; }} .number {{ font-family:"Fira Code",monospace; }}
-    .lists {{ display:grid; grid-template-columns:1fr 1fr; gap:16px; margin-bottom:32px; }}
+    tbody tr:hover {{ background:#eff6ff; }}
+    .number {{ font-family:"Fira Code",monospace; }}
+    .lists {{ display:grid; grid-template-columns:1fr 1fr; gap:16px;
+      margin-bottom:32px; }}
     ul {{ margin:0; padding-left:20px; }} li+li {{ margin-top:8px; }}
     @media (max-width:700px) {{ header {{ align-items:start; flex-direction:column; }}
       .grid,.lists {{ grid-template-columns:1fr; }} }}
@@ -201,8 +206,11 @@ def render_dashboard(
       </table></div></section>
     <section class="panel"><h2>审批与执行状态</h2>
       <p>审批：{approval_summary}</p><p>执行：{execution_summary}</p></section>
-    <div class="lists"><section class="panel"><h2>异常告警</h2><ul>{alerts}</ul></section>
-    <section class="panel"><h2>策略建议（只读）</h2><ul>{recommendations}</ul></section></div>
+    <div class="lists">
+      <section class="panel"><h2>异常告警</h2><ul>{alerts}</ul></section>
+      <section class="panel"><h2>策略建议（只读）</h2>
+        <ul>{recommendations}</ul></section>
+    </div>
   </main>
 </body></html>"""
 

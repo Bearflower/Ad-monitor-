@@ -2,7 +2,6 @@ from datetime import date
 
 from adwatch.domain import DailyAdMetric, ValidatedMetric, ValidationIssue
 
-
 SUPPORTED_CURRENCIES = {
     "CNY",
     "USD",

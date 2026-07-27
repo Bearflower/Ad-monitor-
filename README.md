@@ -99,6 +99,7 @@ data_date,total_product_cost,refund_amount
 .venv/bin/adwatch report weekly --end 2026-07-26
 .venv/bin/adwatch report monthly --month 2026-07
 .venv/bin/adwatch backup create --output var/backups/manual.sqlite3
+.venv/bin/adwatch backup verify --path var/backups/manual.sqlite3
 .venv/bin/adwatch readiness
 .venv/bin/adwatch launch-checklist --format markdown
 ```
@@ -126,6 +127,27 @@ data_date,total_product_cost,refund_amount
 Live 必须同时满足审批有效、熔断关闭、全局开关开启和
 `platform:store_id:campaign_id` 精确白名单命中。默认配置
 `ADWATCH_LIVE_WRITES=false`，因此不会修改真实广告。
+
+此外，每个 TikTok/Shopee 动作都必须完成现场选择器激活。激活配置需要
+真实页面验证产生的前后证据截图：
+
+```bash
+.venv/bin/adwatch activation register \
+  --platform shopee \
+  --action reduce_budget \
+  --version 2026-07-27 \
+  --store-id STORE_ID \
+  --selectors-file selectors.json \
+  --activated-by BOSS \
+  --evidence-before var/screenshots/before.png \
+  --evidence-after var/screenshots/after.png
+
+.venv/bin/adwatch activation list
+```
+
+未激活的动作即使误开 Live 总开关也会在首次页面读取之前被拒绝。
+适配器只调用固定的紫鸟 `page query/input/click/screenshot` 动作，
+不接受调用方传入任意 JavaScript。
 
 ## 本地看板
 

@@ -34,6 +34,7 @@ from adwatch.execution.policy import (
 from adwatch.execution.ziniao_backend import ZiniaoExecutionBackend
 from adwatch.operations.backup import create_backup, verify_backup
 from adwatch.operations.launch_checklist import (
+    LaunchReadiness,
     build_launch_checklist,
     render_launch_checklist,
 )
@@ -217,42 +218,95 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "launch-checklist":
         database.migrate()
         with database.connect() as connection:
-            has_tiktok_campaign = bool(
-                connection.execute(
-                    """
-                    SELECT 1 FROM daily_ad_metrics
-                    WHERE platform='tiktok' LIMIT 1
-                    """
-                ).fetchone()
+            def exists(query: str) -> bool:
+                return bool(connection.execute(query).fetchone())
+
+            has_tiktok_campaign = exists(
+                """
+                SELECT 1 FROM daily_ad_metrics
+                WHERE platform='tiktok' AND source!='mock' LIMIT 1
+                """
             )
-            has_business_costs = bool(
-                connection.execute(
-                    "SELECT 1 FROM product_costs LIMIT 1"
-                ).fetchone()
+            has_shopee_campaign = exists(
+                """
+                SELECT 1 FROM daily_ad_metrics
+                WHERE platform='shopee' AND source!='mock' LIMIT 1
+                """
             )
+            has_business_costs = exists(
+                "SELECT 1 FROM product_costs LIMIT 1"
+            )
+            has_sku_mapping = exists(
+                """
+                SELECT 1 FROM sku_mappings
+                WHERE tiktok_product_id IS NOT NULL
+                   OR shopee_product_id IS NOT NULL
+                LIMIT 1
+                """
+            )
+            has_inventory = exists(
+                "SELECT 1 FROM inventory_snapshots LIMIT 1"
+            )
+            has_exchange_rate = exists(
+                "SELECT 1 FROM exchange_rates LIMIT 1"
+            )
+            selector_count = connection.execute(
+                """
+                SELECT COUNT(*) FROM selector_activations
+                WHERE action IN (
+                    'increase_budget', 'reduce_budget',
+                    'adjust_roas_target', 'pause', 'resume'
+                )
+                """
+            ).fetchone()[0]
             settings_rows = {
                 row["key"]: row["value"]
                 for row in connection.execute(
                     """
                     SELECT key, value FROM system_settings
-                    WHERE key IN ('shadow_reconciled', 'rollback_drilled')
+                    WHERE key IN (
+                        'shadow_reconciled', 'rollback_drilled',
+                        'refund_source_configured',
+                        'three_day_reconciled'
+                    )
                     """
                 )
             }
-        items = build_launch_checklist(
-            bridge_ready=_ziniao_bridge_ready(),
-            tiktok_campaign_ready=has_tiktok_campaign,
-            business_costs_ready=has_business_costs,
-            callback_ready=settings.feishu_callback_ready,
-            shadow_reconciled=settings_rows.get("shadow_reconciled") == "true",
-            rollback_drilled=settings_rows.get("rollback_drilled") == "true",
-            live_allowlist_ready=bool(settings.live_allowlist),
+        readiness = LaunchReadiness(
+            ziniao_bridge=_ziniao_bridge_ready(),
+            tiktok_campaign_validation=has_tiktok_campaign,
+            shopee_campaign_validation=has_shopee_campaign,
+            business_costs=has_business_costs,
+            sku_mapping=has_sku_mapping,
+            refund_source=(
+                settings_rows.get("refund_source_configured") == "true"
+            ),
+            inventory_source=has_inventory,
+            exchange_rate_source=has_exchange_rate,
+            feishu_callback=settings.feishu_callback_ready,
+            shadow_reconciliation=(
+                settings_rows.get("shadow_reconciled") == "true"
+            ),
+            rollback_drill=(
+                settings_rows.get("rollback_drilled") == "true"
+            ),
+            selector_activation=selector_count == 10,
+            platform_api_oauth=settings.platform_api_oauth_ready,
+            three_day_reconciliation=(
+                settings_rows.get("three_day_reconciled") == "true"
+            ),
+            live_allowlist=bool(settings.live_allowlist),
         )
+        items = build_launch_checklist(readiness)
         if args.format == "json":
             print(
                 json.dumps(
                     [
-                        {"code": item.code, "description": item.description}
+                        {
+                            "code": item.code,
+                            "description": item.description,
+                            "optional": item.optional,
+                        }
                         for item in items
                     ],
                     ensure_ascii=False,

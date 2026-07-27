@@ -5,7 +5,6 @@ from decimal import Decimal
 from adwatch.domain import DailyAdMetric, Platform
 from adwatch.pipeline.validation import validate_metric
 
-
 BASE = DailyAdMetric(
     platform=Platform.SHOPEE,
     store="TH Store",
