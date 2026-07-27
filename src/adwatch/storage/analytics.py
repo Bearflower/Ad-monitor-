@@ -92,6 +92,28 @@ class AnalyticsRepository:
         with self.database.connect() as connection:
             return connection.execute(
                 """
+                WITH metric_counts AS (
+                    SELECT
+                        platform, store, data_date,
+                        COUNT(*) AS metric_count
+                    FROM daily_ad_metrics
+                    GROUP BY platform, store, data_date
+                ),
+                daily_order_costs AS (
+                    SELECT
+                        line.platform,
+                        COALESCE(alias.canonical_store, line.store)
+                            AS canonical_store,
+                        line.order_date,
+                        SUM(CAST(line.line_cost_cny AS NUMERIC))
+                            AS product_cost_cny
+                    FROM order_cost_lines AS line
+                    LEFT JOIN store_aliases AS alias
+                      ON alias.platform=line.platform
+                     AND alias.source_store=line.store
+                    GROUP BY
+                        line.platform, canonical_store, line.order_date
+                )
                 SELECT
                     metric.*,
                     cost.product_cost,
@@ -108,7 +130,17 @@ class AnalyticsRepository:
                     campaign.current_budget,
                     campaign.baseline_budget,
                     retest.available_test_budget,
-                    COALESCE(retest.enabled, 0) AS retest_candidate
+                    COALESCE(retest.enabled, 0) AS retest_candidate,
+                    CASE WHEN metric_counts.metric_count = 1
+                         THEN CAST(
+                             daily_order_costs.product_cost_cny AS TEXT
+                         )
+                    END AS order_product_cost_cny,
+                    CASE
+                        WHEN daily_order_costs.product_cost_cny IS NOT NULL
+                         AND metric_counts.metric_count > 1
+                        THEN 1 ELSE 0
+                    END AS order_cost_allocation_ambiguous
                 FROM daily_ad_metrics AS metric
                 LEFT JOIN product_costs AS cost
                     ON cost.sku_id = metric.sku_id
@@ -131,6 +163,14 @@ class AnalyticsRepository:
                     ON retest.platform = metric.platform
                     AND retest.campaign_id = metric.campaign_id
                     AND retest.sku_id = metric.sku_id
+                LEFT JOIN metric_counts
+                    ON metric_counts.platform=metric.platform
+                    AND metric_counts.store=metric.store
+                    AND metric_counts.data_date=metric.data_date
+                LEFT JOIN daily_order_costs
+                    ON daily_order_costs.platform=metric.platform
+                    AND daily_order_costs.canonical_store=metric.store
+                    AND daily_order_costs.order_date=metric.data_date
                 WHERE metric.data_date = ?
                 ORDER BY metric.platform, metric.campaign_id, metric.sku_id
                 """,

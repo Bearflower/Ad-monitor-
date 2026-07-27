@@ -26,3 +26,25 @@ def test_profit_uses_refunds_commission_costs_and_operating_deductions():
 def test_zero_spend_has_no_break_even_roas():
     result = calculate_profit(ProfitInput.zero())
     assert result.break_even_roas is None
+
+
+def test_order_product_cost_cny_is_not_converted_again():
+    result = calculate_profit(
+        ProfitInput(
+            gmv=Decimal("1000"),
+            refunds=Decimal("0"),
+            commission_rate=Decimal("0.10"),
+            product_cost=Decimal("0"),
+            ad_spend=Decimal("100"),
+            seller_shipping=Decimal("0"),
+            coupons=Decimal("0"),
+            allocated_fixed_cost=Decimal("0"),
+            exchange_rate_to_cny=Decimal("0.20"),
+            product_cost_cny=Decimal("75"),
+        )
+    )
+
+    assert result.net_sales_cny == Decimal("200.00")
+    assert result.platform_commission_cny == Decimal("20.00")
+    assert result.gross_profit_cny == Decimal("105.00")
+    assert result.net_profit_cny == Decimal("85.00")

@@ -5,6 +5,7 @@ from adwatch.analytics.service import AnalysisService
 from adwatch.collectors.mock import MockCollector
 from adwatch.domain import DailyAdMetric, Platform
 from adwatch.pipeline.runner import PipelineRunner
+from adwatch.storage.analytics import AnalyticsRepository
 from adwatch.storage.db import Database
 
 
@@ -316,3 +317,136 @@ def test_verified_retest_candidate_is_persisted_with_capped_amount(tmp_path):
             """
         ).fetchone()
     assert tuple(row) == ("allocate_retest", "200.00")
+
+
+def test_single_metric_uses_mapped_order_cost_cny(tmp_path):
+    data_date = date(2026, 7, 23)
+    database = Database(tmp_path / "test.sqlite3")
+    database.migrate()
+
+    class Collector:
+        source = "test"
+        platform = Platform.SHOPEE
+
+        def collect(self, day):
+            return [
+                DailyAdMetric(
+                    platform=self.platform,
+                    store="虾皮泰国",
+                    account_id="account",
+                    campaign_id="campaign",
+                    sku_id="__ALL__",
+                    data_date=day,
+                    currency="THB",
+                    spend=Decimal("100"),
+                    attributed_gmv=Decimal("1000"),
+                    orders=1,
+                    source=self.source,
+                )
+            ]
+
+    PipelineRunner(database).run(Collector(), data_date)
+    service = AnalysisService(database)
+    service.seed_mock_business_data(data_date)
+    with database.transaction() as connection:
+        connection.execute(
+            """
+            INSERT INTO order_cost_lines(
+                platform, store, order_id, sku_id, order_date, quantity,
+                unit_cost_cny, line_cost_cny, source_file
+            ) VALUES (
+                'shopee', 'no4kud44da', 'order', '1 bag', '2026-07-23',
+                1, '75', '75', 'orders.xlsx'
+            )
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO store_aliases(
+                platform, source_store, canonical_store
+            ) VALUES ('shopee', 'no4kud44da', '虾皮泰国')
+            """
+        )
+
+    row = AnalyticsRepository(database).load_analysis_rows(data_date)[0]
+    assert Decimal(row["order_product_cost_cny"]) == Decimal("75")
+    assert row["order_cost_allocation_ambiguous"] == 0
+
+    summary = service.run(data_date)
+
+    assert summary.profit_results == 1
+    with database.connect() as connection:
+        result = connection.execute(
+            """
+            SELECT gross_profit_cny, net_profit_cny
+            FROM profit_results WHERE data_date='2026-07-23'
+            """
+        ).fetchone()
+    assert tuple(result) == ("118.20", "96.36")
+
+
+def test_multiple_metrics_flag_ambiguous_order_cost_allocation(tmp_path):
+    data_date = date(2026, 7, 23)
+    database = Database(tmp_path / "test.sqlite3")
+    database.migrate()
+
+    class Collector:
+        source = "test"
+        platform = Platform.SHOPEE
+
+        def collect(self, day):
+            return [
+                DailyAdMetric(
+                    platform=self.platform,
+                    store="虾皮泰国",
+                    account_id="account",
+                    campaign_id=f"campaign-{index}",
+                    sku_id=f"SKU-{index}",
+                    data_date=day,
+                    currency="THB",
+                    spend=Decimal("100"),
+                    attributed_gmv=Decimal("300"),
+                    orders=1,
+                    source=self.source,
+                )
+                for index in range(2)
+            ]
+
+    PipelineRunner(database).run(Collector(), data_date)
+    service = AnalysisService(database)
+    service.seed_mock_business_data(data_date)
+    with database.transaction() as connection:
+        connection.execute(
+            """
+            INSERT INTO order_cost_lines(
+                platform, store, order_id, sku_id, order_date, quantity,
+                unit_cost_cny, line_cost_cny, source_file
+            ) VALUES (
+                'shopee', 'no4kud44da', 'order', '1 bag', '2026-07-23',
+                1, '75', '75', 'orders.xlsx'
+            )
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO store_aliases(
+                platform, source_store, canonical_store
+            ) VALUES ('shopee', 'no4kud44da', '虾皮泰国')
+            """
+        )
+
+    rows = AnalyticsRepository(database).load_analysis_rows(data_date)
+    assert all(row["order_product_cost_cny"] is None for row in rows)
+    assert all(row["order_cost_allocation_ambiguous"] == 1 for row in rows)
+
+    service.run(data_date)
+
+    with database.connect() as connection:
+        count = connection.execute(
+            """
+            SELECT COUNT(*) FROM alerts
+            WHERE rule_code='ambiguous_order_cost_allocation'
+              AND data_date='2026-07-23'
+            """
+        ).fetchone()[0]
+    assert count == 2

@@ -88,6 +88,17 @@ class AnalysisService:
                     )
                     alert_count += 1
                     operational_alert_count += 1
+                if row["order_cost_allocation_ambiguous"]:
+                    self._upsert_alert(
+                        connection,
+                        row,
+                        "ambiguous_order_cost_allocation",
+                        "info",
+                        "Order cost matches multiple ad metric rows",
+                    )
+                    alert_count += 1
+                    pending_data_count += 1
+                    continue
                 required = (
                     "product_cost",
                     "commission_rate",
@@ -97,7 +108,13 @@ class AnalysisService:
                     "start_date",
                     "target_roas",
                 )
-                missing = [field for field in required if row[field] is None]
+                has_order_cost = row["order_product_cost_cny"] is not None
+                missing = [
+                    field
+                    for field in required
+                    if row[field] is None
+                    and not (field == "product_cost" and has_order_cost)
+                ]
                 if missing:
                     self._upsert_alert(
                         connection,
@@ -115,7 +132,7 @@ class AnalysisService:
                         gmv=Decimal(row["attributed_gmv"]),
                         refunds=Decimal(row["refund_amount"]),
                         commission_rate=Decimal(row["commission_rate"]),
-                        product_cost=Decimal(row["product_cost"]),
+                        product_cost=Decimal(row["product_cost"] or "0"),
                         ad_spend=Decimal(row["spend"]),
                         seller_shipping=Decimal(row["seller_shipping"]),
                         coupons=Decimal(row["coupons"]),
@@ -123,6 +140,11 @@ class AnalysisService:
                             row["allocated_fixed_cost"]
                         ),
                         exchange_rate_to_cny=Decimal(row["rate_to_cny"]),
+                        product_cost_cny=(
+                            None
+                            if row["order_product_cost_cny"] is None
+                            else Decimal(row["order_product_cost_cny"])
+                        ),
                     )
                 )
                 self._upsert_profit(connection, row, profit)
@@ -242,7 +264,9 @@ class AnalysisService:
     def _capabilities(rows) -> dict[str, str]:
         has_metrics = bool(rows)
         has_costs = has_metrics and all(
-            row["product_cost"] is not None for row in rows
+            row["product_cost"] is not None
+            or row["order_product_cost_cny"] is not None
+            for row in rows
         )
         verified_fields = (
             "product_cost",
@@ -256,7 +280,14 @@ class AnalysisService:
             "target_roas",
         )
         has_verified_profit = has_metrics and all(
-            all(row[field] is not None for field in verified_fields)
+            all(
+                row[field] is not None
+                or (
+                    field == "product_cost"
+                    and row["order_product_cost_cny"] is not None
+                )
+                for field in verified_fields
+            )
             for row in rows
         )
         has_inventory = has_metrics and all(
