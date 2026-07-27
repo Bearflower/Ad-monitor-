@@ -93,6 +93,23 @@ data_date,total_product_cost,refund_amount
 系统自动使用已采集的订单、GMV 和广告花费。若同一天有多条广告记录，
 最小模式会拒绝导入以防成本被错误分摊，应改用完整模板。
 
+也可以直接导入中文表头的订单 SKU 成本明细 XLSX/CSV：
+
+```bash
+.venv/bin/adwatch business import-orders \
+  --file /Users/yl/Desktop/订单SKU成本明细模板-shopee2.xlsx
+.venv/bin/adwatch business map-store \
+  --platform shopee --source no4kud44da --target 虾皮泰国
+.venv/bin/adwatch business order-summary \
+  --from 2026-07-08 --to 2026-07-17
+```
+
+表头固定为 `日期,平台,店铺,订单号,SKU,数量,单件成本_人民币`。`数量`
+表示购买的可销售规格件数：一个 `5 bags` 规格填写数量 `1`、单件成本
+`17`；只有购买两个完整的 `5 bags` 规格时数量才填写 `2`。同一订单的
+不同 SKU 使用相同订单号分多行。重复导入采用幂等更新，不重复累计成本。
+订单成本已经是人民币，利润分析不会再次按泰铢汇率换算。
+
 ## 报告、备份与上线检查
 
 ```bash

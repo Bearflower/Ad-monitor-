@@ -221,7 +221,11 @@ def main(argv: list[str] | None = None) -> int:
             )
             has_business_costs = bool(
                 connection.execute(
-                    "SELECT 1 FROM product_costs LIMIT 1"
+                    """
+                    SELECT 1
+                    WHERE EXISTS(SELECT 1 FROM product_costs)
+                       OR EXISTS(SELECT 1 FROM order_cost_lines)
+                    """
                 ).fetchone()
             )
         checks = readiness_status(
@@ -252,7 +256,11 @@ def main(argv: list[str] | None = None) -> int:
                 """
             )
             has_business_costs = exists(
-                "SELECT 1 FROM product_costs LIMIT 1"
+                """
+                SELECT 1
+                WHERE EXISTS(SELECT 1 FROM product_costs)
+                   OR EXISTS(SELECT 1 FROM order_cost_lines)
+                """
             )
             has_sku_mapping = exists(
                 """

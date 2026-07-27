@@ -1,6 +1,7 @@
 import adwatch.cli
 from adwatch.cli import main
 from adwatch.config import Settings
+from adwatch.storage.db import Database
 
 
 def test_cli_help_exits_successfully(capsys):
@@ -123,6 +124,32 @@ def test_launch_checklist_cli_writes_markdown(tmp_path, monkeypatch, capsys):
     assert "# Adwatch 上线待办" in output
     assert "ziniao_bridge" in output
     assert "live_allowlist" in output
+
+
+def test_order_costs_satisfy_launch_business_cost_gate(
+    tmp_path, monkeypatch, capsys
+):
+    settings = Settings(data_dir=tmp_path)
+    monkeypatch.setattr(adwatch.cli.Settings, "from_env", lambda: settings)
+    monkeypatch.setattr(adwatch.cli, "_ziniao_bridge_ready", lambda: False)
+    database = Database(settings.database_path)
+    database.migrate()
+    with database.transaction() as connection:
+        connection.execute(
+            """
+            INSERT INTO order_cost_lines(
+                platform, store, order_id, sku_id, order_date, quantity,
+                unit_cost_cny, line_cost_cny, source_file
+            ) VALUES (
+                'shopee', 'store', 'order', '1 bag', '2026-07-23',
+                1, '5', '5', 'orders.xlsx'
+            )
+            """
+        )
+
+    assert main(["launch-checklist", "--format", "markdown"]) == 0
+
+    assert "business_costs" not in capsys.readouterr().out
 
 
 def test_weekly_report_cli_writes_local_file(tmp_path, monkeypatch):
