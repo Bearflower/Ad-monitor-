@@ -64,6 +64,18 @@
 再次导入相同主键时，更新日期、数量、成本和来源，不新增重复记录。
 源文件删除一行不会自动删除数据库历史记录，防止一次不完整文件造成数据丢失。
 
+新增 `store_aliases`：
+
+| 字段 | 类型/约束 |
+|---|---|
+| platform | `TEXT NOT NULL` |
+| source_store | 订单文件中的店铺名，`TEXT NOT NULL` |
+| canonical_store | `daily_ad_metrics` 中的店铺名，`TEXT NOT NULL` |
+
+主键为 `(platform, source_store)`。订单文件继续使用平台真实店名，不要求经营人员
+改成紫鸟内部显示名。首个现场映射为
+`shopee/no4kud44da -> 虾皮泰国`。
+
 ## 导入流程
 
 新增命令：
@@ -143,6 +155,18 @@ date_range=2026-07-08..2026-07-17 total_cost_cny=75.00
 
 输出按日期、平台和店铺汇总的订单数、规格件数和商品成本人民币，用于人工对账。
 
+店铺名与紫鸟内部显示名不同时，使用显式映射命令：
+
+```bash
+.venv/bin/adwatch business map-store \
+  --platform shopee \
+  --source no4kud44da \
+  --target 虾皮泰国
+```
+
+目标店铺必须已经存在于 `daily_ad_metrics`；错误拼写会被拒绝。利润分析使用
+`canonical_store` 关联广告指标，但订单明细保留原始 `source_store`。
+
 上线检查中的 `business_costs` 在至少存在一条有效 `order_cost_lines`
 或旧 `product_costs` 时视为完成。
 
@@ -154,6 +178,8 @@ date_range=2026-07-08..2026-07-17 total_cost_cny=75.00
 - `YYYYMMDD`、ISO 和 Excel 日期可正确规范化；
 - 同一订单多个 SKU 可同时保存；
 - 同一订单相同 SKU 的幂等更新；
+- 店铺别名只能映射到同平台已经采集到的目标店铺；
+- `no4kud44da` 可通过别名匹配 `虾皮泰国`；
 - 文件内完全重复折叠、冲突重复整批拒绝；
 - 缺列、空值、非法平台、零/负数量、负成本整批拒绝；
 - 订单号和 SKU 的文本值不被数值化；
