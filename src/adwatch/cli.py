@@ -24,8 +24,13 @@ from adwatch.collectors.ziniao_client import (
 from adwatch.config import Settings
 from adwatch.dashboard.app import serve
 from adwatch.domain import Platform
+from adwatch.execution.activation import SelectorActivationStore
 from adwatch.execution.executor import ExecutionError, SafeExecutor
-from adwatch.execution.policy import ExecutionPolicy, PolicyError
+from adwatch.execution.policy import (
+    ALLOWED_ACTIONS,
+    ExecutionPolicy,
+    PolicyError,
+)
 from adwatch.execution.ziniao_backend import ZiniaoExecutionBackend
 from adwatch.operations.backup import create_backup, verify_backup
 from adwatch.operations.launch_checklist import (
@@ -77,6 +82,30 @@ def build_parser() -> argparse.ArgumentParser:
     approval_serve = approval_commands.add_parser("serve")
     approval_serve.add_argument("--host", default="127.0.0.1")
     approval_serve.add_argument("--port", type=int, default=8787)
+    activation = subcommands.add_parser("activation")
+    activation_commands = activation.add_subparsers(
+        dest="activation_command"
+    )
+    activation_commands.add_parser("list")
+    activation_register = activation_commands.add_parser("register")
+    activation_register.add_argument(
+        "--platform", choices=("tiktok", "shopee"), required=True
+    )
+    activation_register.add_argument(
+        "--action", choices=sorted(ALLOWED_ACTIONS), required=True
+    )
+    activation_register.add_argument("--version", required=True)
+    activation_register.add_argument("--store-id", required=True)
+    activation_register.add_argument(
+        "--selectors-file", type=Path, required=True
+    )
+    activation_register.add_argument("--activated-by", required=True)
+    activation_register.add_argument(
+        "--evidence-before", type=Path, required=True
+    )
+    activation_register.add_argument(
+        "--evidence-after", type=Path, required=True
+    )
     execute = subcommands.add_parser("execute")
     execute.add_argument("execution_mode", choices=("shadow", "live"))
     execute.add_argument("--approval-id", required=True)
@@ -250,6 +279,61 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         parser.print_help()
         return 2
+    if args.command == "activation":
+        database.migrate()
+        activation_store = SelectorActivationStore(database)
+        if args.activation_command == "list":
+            for item in activation_store.list():
+                print(
+                    f"{item.platform}/{item.action} "
+                    f"version={item.selector_version} "
+                    f"store={item.store_id} "
+                    f"activated_at={item.activated_at}"
+                )
+            return 0
+        if args.activation_command == "register":
+            evidence = (args.evidence_before, args.evidence_after)
+            if not all(path.is_file() for path in evidence):
+                print("Activation evidence files must exist")
+                return 2
+            try:
+                selectors = json.loads(
+                    args.selectors_file.read_text(encoding="utf-8")
+                )
+            except (OSError, json.JSONDecodeError) as error:
+                print(f"Selector configuration is invalid: {error}")
+                return 2
+            required_selectors = {"value", "stage", "submit"}
+            if (
+                not isinstance(selectors, dict)
+                or not required_selectors <= selectors.keys()
+                or not all(
+                    isinstance(value, str) and value
+                    for value in selectors.values()
+                )
+            ):
+                print(
+                    "Selector configuration must contain non-empty "
+                    "value, stage and submit strings"
+                )
+                return 2
+            activation_store.register(
+                platform=args.platform,
+                action=args.action,
+                selector_version=args.version,
+                selectors=selectors,
+                store_id=args.store_id,
+                activated_by=args.activated_by,
+                evidence_before=str(args.evidence_before.resolve()),
+                evidence_after=str(args.evidence_after.resolve()),
+            )
+            print(
+                f"Activated {args.platform}/{args.action} "
+                f"version={args.version}"
+            )
+            return 0
+        parser.print_help()
+        return 2
     if args.command == "execute":
         if args.execution_mode == "live" and not settings.live_writes:
             print("ADWATCH_LIVE_WRITES is disabled")
@@ -271,6 +355,8 @@ def main(argv: list[str] | None = None) -> int:
             ZiniaoCliClient(),
             mode=args.execution_mode,
             policy=policy,
+            activations=SelectorActivationStore(database),
+            screenshot_dir=settings.data_dir / "screenshots",
         )
         try:
             result = SafeExecutor(database, backend).execute(

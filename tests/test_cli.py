@@ -236,3 +236,47 @@ def test_shadow_execution_cli_runs_safe_executor(
         "expected_before": {"budget": "100"},
     }
     assert "audit=audit-1 status=succeeded" in capsys.readouterr().out
+
+
+def test_activation_register_and_list_cli(tmp_path, monkeypatch, capsys):
+    settings = Settings(data_dir=tmp_path)
+    monkeypatch.setattr(adwatch.cli.Settings, "from_env", lambda: settings)
+    selectors = tmp_path / "selectors.json"
+    selectors.write_text(
+        '{"value":"#value","stage":"#stage","submit":"#submit"}'
+    )
+    before = tmp_path / "before.png"
+    after = tmp_path / "after.png"
+    before.write_bytes(b"before")
+    after.write_bytes(b"after")
+
+    assert (
+        main(
+            [
+                "activation",
+                "register",
+                "--platform",
+                "shopee",
+                "--action",
+                "reduce_budget",
+                "--version",
+                "v1",
+                "--store-id",
+                "store-1",
+                "--selectors-file",
+                str(selectors),
+                "--activated-by",
+                "boss",
+                "--evidence-before",
+                str(before),
+                "--evidence-after",
+                str(after),
+            ]
+        )
+        == 0
+    )
+    assert main(["activation", "list"]) == 0
+
+    output = capsys.readouterr().out
+    assert "shopee/reduce_budget" in output
+    assert "version=v1" in output

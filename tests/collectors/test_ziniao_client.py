@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import pytest
 
 from adwatch.collectors.ziniao_client import (
@@ -241,3 +243,31 @@ def test_cli_page_exec_until_stops_after_three_attempts_by_default():
         )
 
     assert len(runner.commands) == 3
+
+
+def test_cli_page_actions_use_fixed_shortcuts(tmp_path):
+    runner = FakeCommandRunner(
+        [
+            CommandResult('{"ok":true,"data":{"value":"100"}}'),
+            CommandResult('{"ok":true,"data":{}}'),
+            CommandResult('{"ok":true,"data":{}}'),
+            CommandResult('{"ok":true,"data":{"path":"shot.png"}}'),
+        ]
+    )
+    client = ZiniaoCliClient(runner=runner)
+    screenshot = tmp_path / "shot.png"
+
+    assert client.page_query("store", "#budget") == {"value": "100"}
+    client.page_input("store", "#budget", "70", clear=True)
+    client.page_click("store", "#submit")
+    assert client.page_screenshot("store", screenshot) == str(
+        screenshot.resolve()
+    )
+
+    commands = [call[0] for call in runner.commands]
+    assert commands[0][1:3] == ["page", "query"]
+    assert commands[1][1:3] == ["page", "input"]
+    assert "--clear" in commands[1]
+    assert commands[2][1:3] == ["page", "click"]
+    assert commands[3][1:3] == ["page", "screenshot"]
+    assert str(Path(screenshot).resolve()) in commands[3]

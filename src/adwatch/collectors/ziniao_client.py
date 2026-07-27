@@ -6,6 +6,7 @@ import time
 import urllib.request
 import uuid
 from collections.abc import Callable
+from pathlib import Path
 from typing import Protocol
 
 from adwatch.config import Settings
@@ -47,6 +48,62 @@ class ZiniaoCliClient:
             except json.JSONDecodeError:
                 return result
         return result
+
+    def page_query(self, store_id: str, selector: str) -> object:
+        response = self._run(
+            "page",
+            "query",
+            "--store-id",
+            store_id,
+            "--selector",
+            selector,
+        )
+        return response.get("data")
+
+    def page_input(
+        self,
+        store_id: str,
+        selector: str,
+        text: str,
+        *,
+        clear: bool = False,
+    ) -> None:
+        arguments = [
+            "page",
+            "input",
+            "--store-id",
+            store_id,
+            "--selector",
+            selector,
+            "--text",
+            text,
+        ]
+        if clear:
+            arguments.append("--clear")
+        self._run(*arguments)
+
+    def page_click(self, store_id: str, selector: str) -> None:
+        self._run(
+            "page",
+            "click",
+            "--store-id",
+            store_id,
+            "--selector",
+            selector,
+        )
+
+    def page_screenshot(self, store_id: str, destination: Path) -> str:
+        path = destination.resolve()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        self._run(
+            "page",
+            "screenshot",
+            "--store-id",
+            store_id,
+            "--path",
+            str(path),
+        )
+        return str(path)
 
     def navigate_and_exec(
         self,

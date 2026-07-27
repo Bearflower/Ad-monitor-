@@ -270,4 +270,23 @@ MIGRATIONS = [
         ADD COLUMN amount TEXT;
         """,
     ),
+    (
+        7,
+        """
+        CREATE TABLE selector_activations (
+            platform TEXT NOT NULL,
+            action TEXT NOT NULL,
+            selector_version TEXT NOT NULL,
+            selectors_json TEXT NOT NULL,
+            store_id TEXT NOT NULL,
+            activated_by TEXT NOT NULL,
+            evidence_before TEXT NOT NULL,
+            evidence_after TEXT NOT NULL,
+            activated_at TEXT NOT NULL DEFAULT (
+                strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+            ),
+            PRIMARY KEY(platform, action)
+        );
+        """,
+    ),
 ]

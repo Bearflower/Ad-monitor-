@@ -1,9 +1,15 @@
 from __future__ import annotations
 
 from decimal import Decimal
+from pathlib import Path
 
 from adwatch.collectors.ziniao_client import ZiniaoCliClient
-from adwatch.execution.policy import ExecutionPolicy
+from adwatch.execution.actions import ActionAdapter, ActionRegistry
+from adwatch.execution.activation import (
+    SelectorActivation,
+    SelectorActivationStore,
+)
+from adwatch.execution.policy import ExecutionPolicy, PolicyError
 
 
 class ZiniaoExecutionBackend:
@@ -13,11 +19,38 @@ class ZiniaoExecutionBackend:
         *,
         mode: str,
         policy: ExecutionPolicy,
+        activations: SelectorActivationStore | None = None,
+        registry: ActionRegistry | None = None,
+        screenshot_dir: Path = Path("var/screenshots"),
     ) -> None:
         self.client = client
         self.mode = mode
         self.policy = policy
+        self.activations = activations
+        self.registry = registry or ActionRegistry.default()
+        self.screenshot_dir = screenshot_dir
         self._before: dict[str, str] | None = None
+        self._adapter: ActionAdapter | None = None
+        self._activation: SelectorActivation | None = None
+        self._store_id = ""
+
+    def _resolve(
+        self, recommendation: dict
+    ) -> tuple[ActionAdapter, SelectorActivation]:
+        platform = str(recommendation["platform"])
+        action = str(recommendation["action"])
+        activation = (
+            None
+            if self.activations is None
+            else self.activations.get(platform, action)
+        )
+        if activation is None:
+            raise PolicyError(
+                f"{platform}/{action} is not field-activated"
+            )
+        if activation.store_id != str(recommendation["store_id"]):
+            raise PolicyError("field activation does not match target store")
+        return self.registry.get(platform, action), activation
 
     def read_current(self, recommendation: dict) -> dict:
         self.policy.authorize(
@@ -27,12 +60,17 @@ class ZiniaoExecutionBackend:
             campaign_id=str(recommendation["campaign_id"]),
             action=str(recommendation["action"]),
         )
-        result = self.client.page_exec(
-            str(recommendation["store_id"]),
-            '/* ADWATCH_READ */ JSON.stringify({budget:"100"})',
+        adapter, activation = self._resolve(recommendation)
+        store_id = str(recommendation["store_id"])
+        result = adapter.read(
+            self.client,
+            store_id,
+            str(recommendation["campaign_id"]),
+            activation.selectors,
         )
-        if not isinstance(result, dict):
-            raise RuntimeError("advertising page returned invalid current state")
+        self._adapter = adapter
+        self._activation = activation
+        self._store_id = store_id
         self._before = {str(key): str(value) for key, value in result.items()}
         return dict(self._before)
 
@@ -49,31 +87,72 @@ class ZiniaoExecutionBackend:
         intended = self._intended_state(recommendation)
         if self.mode == "shadow":
             return {**intended, "mode": "shadow", "submitted": False}
-        result = self.client.page_exec(
-            str(recommendation["store_id"]),
-            "/* ADWATCH_SUBMIT */ (()=>{"
-            f"const intended={intended!r};"
-            'return JSON.stringify(intended);})()',
+        adapter, activation = self._resolved_state()
+        campaign_id = str(recommendation["campaign_id"])
+        adapter.stage(
+            self.client,
+            self._store_id,
+            campaign_id,
+            intended,
+            activation.selectors,
         )
-        if not isinstance(result, dict):
+        adapter.submit(
+            self.client,
+            self._store_id,
+            campaign_id,
+            activation.selectors,
+        )
+        confirmed = adapter.read(
+            self.client,
+            self._store_id,
+            campaign_id,
+            activation.selectors,
+        )
+        if confirmed != intended:
             raise RuntimeError("advertising page did not confirm submitted state")
-        return {str(key): str(value) for key, value in result.items()}
+        return confirmed
 
     def capture(self, label: str) -> str:
-        return f"ziniao://capture/{label}"
+        adapter, _ = self._resolved_state()
+        destination = (self.screenshot_dir / f"{label}.png").resolve()
+        self.screenshot_dir.resolve().mkdir(parents=True, exist_ok=True)
+        if self.screenshot_dir.resolve() not in destination.parents:
+            raise RuntimeError("screenshot path escaped configured directory")
+        return adapter.capture(self.client, self._store_id, destination)
 
     def rollback(self, recommendation: dict, before: dict) -> dict:
         if self.mode == "shadow":
             return dict(before)
-        result = self.client.page_exec(
-            str(recommendation["store_id"]),
-            "/* ADWATCH_ROLLBACK */ (()=>{"
-            f"const before={before!r};"
-            'return JSON.stringify(before);})()',
+        adapter, activation = self._resolved_state()
+        campaign_id = str(recommendation["campaign_id"])
+        restored = {str(key): str(value) for key, value in before.items()}
+        adapter.stage(
+            self.client,
+            self._store_id,
+            campaign_id,
+            restored,
+            activation.selectors,
         )
-        if not isinstance(result, dict):
+        adapter.submit(
+            self.client,
+            self._store_id,
+            campaign_id,
+            activation.selectors,
+        )
+        confirmed = adapter.read(
+            self.client,
+            self._store_id,
+            campaign_id,
+            activation.selectors,
+        )
+        if confirmed != restored:
             raise RuntimeError("advertising page did not confirm rollback")
-        return {str(key): str(value) for key, value in result.items()}
+        return confirmed
+
+    def _resolved_state(self) -> tuple[ActionAdapter, SelectorActivation]:
+        if self._adapter is None or self._activation is None:
+            raise RuntimeError("advertising state has not been read")
+        return self._adapter, self._activation
 
     def _intended_state(self, recommendation: dict) -> dict[str, str]:
         before = self._before or {}
@@ -81,11 +160,11 @@ class ZiniaoExecutionBackend:
         if action in {"increase_budget", "reduce_budget"}:
             budget = Decimal(before["budget"])
             ratio = Decimal(str(recommendation["change_ratio"]))
-            return {"budget": f"{budget * (Decimal('1') + ratio):.2f}"}
+            return {"budget": f"{budget * (Decimal(1) + ratio):.2f}"}
         if action == "adjust_roas_target":
             target = Decimal(before["target_roas"])
             ratio = Decimal(str(recommendation["change_ratio"]))
-            return {"target_roas": f"{target * (Decimal('1') + ratio):.2f}"}
+            return {"target_roas": f"{target * (Decimal(1) + ratio):.2f}"}
         if action == "pause":
             return {"status": "paused"}
         if action == "resume":
