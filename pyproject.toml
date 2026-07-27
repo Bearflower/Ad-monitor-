@@ -7,7 +7,9 @@ name = "adwatch"
 version = "0.1.0"
 description = "TikTok and Shopee advertising operations automation"
 requires-python = ">=3.11"
-dependencies = []
+dependencies = [
+  "openpyxl>=3.1,<4",
+]
 
 [project.optional-dependencies]
 dev = [
