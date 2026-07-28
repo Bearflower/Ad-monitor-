@@ -504,4 +504,36 @@ MIGRATIONS = [
         );
         """,
     ),
+    (
+        12,
+        """
+        CREATE TABLE profit_share_agreements (
+            id TEXT PRIMARY KEY, effective_from TEXT NOT NULL UNIQUE,
+            effective_to TEXT, version INTEGER NOT NULL UNIQUE,
+            shares_json TEXT NOT NULL, created_by TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+        CREATE TABLE profit_periods (
+            id TEXT PRIMARY KEY, starts_on TEXT NOT NULL, ends_on TEXT NOT NULL,
+            agreement_id TEXT NOT NULL REFERENCES profit_share_agreements(id),
+            net_profit_cny TEXT NOT NULL, status TEXT NOT NULL,
+            reversal_reason TEXT, created_by TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            CHECK(starts_on <= ends_on)
+        );
+        CREATE TABLE profit_allocations (
+            period_id TEXT NOT NULL REFERENCES profit_periods(id),
+            partner TEXT NOT NULL, share_ratio TEXT NOT NULL,
+            amount_cny TEXT NOT NULL,
+            PRIMARY KEY(period_id, partner)
+        );
+        CREATE TABLE profit_payments (
+            id TEXT PRIMARY KEY,
+            period_id TEXT NOT NULL REFERENCES profit_periods(id),
+            partner TEXT NOT NULL, amount_cny TEXT NOT NULL,
+            paid_on TEXT NOT NULL, status TEXT NOT NULL,
+            note TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL
+        );
+        """,
+    ),
 ]
