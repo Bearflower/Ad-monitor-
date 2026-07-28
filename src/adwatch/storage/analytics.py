@@ -99,7 +99,7 @@ class AnalyticsRepository:
                     FROM daily_ad_metrics
                     GROUP BY platform, store, data_date
                 ),
-                daily_order_costs AS (
+                legacy_order_costs AS (
                     SELECT
                         line.platform,
                         COALESCE(alias.canonical_store, line.store)
@@ -113,6 +113,44 @@ class AnalyticsRepository:
                      AND alias.source_store=line.store
                     GROUP BY
                         line.platform, canonical_store, line.order_date
+                ),
+                snapshot_order_costs AS (
+                    SELECT
+                        snapshot.platform,
+                        COALESCE(alias.canonical_store, snapshot.store)
+                            AS canonical_store,
+                        movement.occurred_on AS order_date,
+                        SUM(CAST(snapshot.total_cost_cny AS NUMERIC))
+                            AS product_cost_cny
+                    FROM order_cost_snapshots AS snapshot
+                    JOIN inventory_movements AS movement
+                      ON movement.source_type='order'
+                     AND movement.movement_type='sale_out'
+                     AND movement.source_id=(
+                         snapshot.platform || ':' || snapshot.store || ':'
+                         || snapshot.order_id
+                     )
+                     AND movement.seller_sku=snapshot.seller_sku
+                    LEFT JOIN store_aliases AS alias
+                      ON alias.platform=snapshot.platform
+                     AND alias.source_store=snapshot.store
+                    WHERE snapshot.status='confirmed'
+                    GROUP BY
+                        snapshot.platform, canonical_store,
+                        movement.occurred_on
+                ),
+                daily_order_costs AS (
+                    SELECT * FROM legacy_order_costs
+                    UNION ALL
+                    SELECT snapshot.*
+                    FROM snapshot_order_costs AS snapshot
+                    WHERE NOT EXISTS (
+                        SELECT 1 FROM legacy_order_costs AS legacy
+                        WHERE legacy.platform=snapshot.platform
+                          AND legacy.canonical_store=
+                              snapshot.canonical_store
+                          AND legacy.order_date=snapshot.order_date
+                    )
                 )
                 SELECT
                     metric.*,

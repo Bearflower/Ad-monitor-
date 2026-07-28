@@ -10,7 +10,11 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
 from adwatch.dashboard.routes import DashboardRouter
-from adwatch.dashboard.views import render_navigation, render_operations_page
+from adwatch.dashboard.views import (
+    render_module_page,
+    render_navigation,
+    render_operations_page,
+)
 from adwatch.inventory.service import InventoryService
 from adwatch.ledger.service import LedgerService
 from adwatch.orders.repository import OrderRepository
@@ -250,6 +254,28 @@ def serve(
         orders=OrderRepository(database),
         profit_sharing=ProfitSharingService(database),
     )
+    module_pages = {
+        "/optimization": (
+            "广告调优",
+            "查看三种 ROAS、异常证据、策略建议、审批和执行状态。",
+        ),
+        "/ad-funds": (
+            "收入与广告资金",
+            "平台收入、广告充值和广告实际消耗分账展示。",
+        ),
+        "/inventory": (
+            "SKU与库存",
+            "维护 SKU 成本版本、采购入库、库存流水和订单成本快照。",
+        ),
+        "/profit-sharing": (
+            "合伙人分润",
+            "按经营账生成利润期间并依据生效协议记录应分和实付。",
+        ),
+        "/approvals": (
+            "审批执行",
+            "查看飞书审批、Shadow、Live、回滚和熔断审计。",
+        ),
+    }
 
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:
@@ -278,6 +304,12 @@ def serve(
                 content_type = "text/html; charset=utf-8"
             elif parsed.path == "/operations":
                 body = render_operations_page(csrf_token).encode("utf-8")
+                content_type = "text/html; charset=utf-8"
+            elif parsed.path in module_pages:
+                title, summary = module_pages[parsed.path]
+                body = render_module_page(
+                    parsed.path, title, summary
+                ).encode("utf-8")
                 content_type = "text/html; charset=utf-8"
             else:
                 self.send_error(404)

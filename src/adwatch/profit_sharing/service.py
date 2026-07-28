@@ -135,6 +135,78 @@ class ProfitSharingService:
                 )
         return period_id
 
+    def create_period_from_ledger(
+        self, *, starts_on: date, ends_on: date, actor: str
+    ) -> str:
+        start, end = starts_on.isoformat(), ends_on.isoformat()
+        with self.database.connect() as connection:
+            revenue = connection.execute(
+                """
+                SELECT COALESCE(SUM(CAST(amount_cny AS REAL)), 0)
+                FROM settlement_records WHERE settled_on BETWEEN ? AND ?
+                """,
+                (start, end),
+            ).fetchone()[0]
+            cogs = connection.execute(
+                """
+                SELECT COALESCE(SUM(CAST(total_cost_cny AS REAL)), 0)
+                FROM order_cost_snapshots AS snapshot
+                JOIN inventory_movements AS movement
+                  ON movement.source_type='order'
+                 AND movement.movement_type='sale_out'
+                 AND movement.source_id=(
+                    snapshot.platform || ':' || snapshot.store || ':'
+                    || snapshot.order_id
+                 )
+                 AND movement.seller_sku=snapshot.seller_sku
+                WHERE snapshot.status='confirmed'
+                  AND movement.occurred_on BETWEEN ? AND ?
+                """,
+                (start, end),
+            ).fetchone()[0]
+            ad_spend = connection.execute(
+                """
+                SELECT COALESCE(SUM(CAST(amount_cny AS REAL)), 0)
+                FROM ad_spend_entries WHERE occurred_on BETWEEN ? AND ?
+                """,
+                (start, end),
+            ).fetchone()[0]
+            expenses = connection.execute(
+                """
+                SELECT COALESCE(SUM(CAST(amount_cny AS REAL)), 0)
+                FROM expense_entries
+                WHERE occurred_on BETWEEN ? AND ? AND status='confirmed'
+                  AND affects_profit=1
+                """,
+                (start, end),
+            ).fetchone()[0]
+            review_costs = connection.execute(
+                """
+                SELECT COALESCE(SUM(
+                    CAST(goods_cost_cny AS REAL)
+                    + CAST(service_fee_cny AS REAL)
+                ), 0)
+                FROM review_order_costs
+                WHERE occurred_on BETWEEN ? AND ? AND status='confirmed'
+                """,
+                (start, end),
+            ).fetchone()[0]
+        net_profit = Decimal(str(revenue)) - sum(
+            (
+                Decimal(str(cogs)),
+                Decimal(str(ad_spend)),
+                Decimal(str(expenses)),
+                Decimal(str(review_costs)),
+            ),
+            Decimal(0),
+        )
+        return self.create_period(
+            starts_on=starts_on,
+            ends_on=ends_on,
+            net_profit_cny=net_profit,
+            actor=actor,
+        )
+
     def confirm_period(self, period_id: str, *, actor: str) -> None:
         with self.database.transaction() as connection:
             row = connection.execute(

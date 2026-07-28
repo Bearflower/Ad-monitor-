@@ -122,6 +122,28 @@ def render_operations_forms(csrf_token: str) -> str:
         <label>苏姐比例 <input name="sujie_share" value="0.40"></label>
         <button>新增协议版本</button>
       </form>
+      <form method="post" action="/profit-periods">
+        <input type="hidden" name="csrf_token" value="{token}">
+        <label>结算开始 <input type="date" name="starts_on" required></label>
+        <label>结算结束 <input type="date" name="ends_on" required></label>
+        <button>按经营账生成分润草稿</button>
+      </form>
+      <form method="post" action="/profit-payments">
+        <input type="hidden" name="csrf_token" value="{token}">
+        <input name="period_id" placeholder="分润期间 ID" required>
+        <input name="partner" placeholder="收款人" required>
+        <input name="amount_cny" placeholder="实付人民币" required>
+        <input type="date" name="paid_on" required>
+        <select name="status"><option value="planned">计划</option>
+          <option value="paid">已支付</option></select>
+        <input name="note" placeholder="备注">
+        <button>记录分润支付</button>
+      </form>
+      <form method="post" action="/profit-periods/confirm">
+        <input type="hidden" name="csrf_token" value="{token}">
+        <input name="period_id" placeholder="分润期间 ID" required>
+        <button>确认分润期间</button>
+      </form>
     </section>
     """
 
@@ -134,6 +156,14 @@ def render_operations_page(csrf_token: str) -> str:
     {render_navigation("/operations")}
     <main><h1>记账对账</h1>{render_operations_forms(csrf_token)}</main>
     </body></html>"""
+
+
+def render_module_page(path: str, title: str, summary: str) -> str:
+    return f"""<!doctype html><html lang="zh-CN"><head>
+    <meta charset="utf-8"><meta name="viewport"
+    content="width=device-width,initial-scale=1"><title>{html.escape(title)}</title>
+    </head><body>{render_navigation(path)}<main><h1>{html.escape(title)}</h1>
+    <p>{html.escape(summary)}</p></main></body></html>"""
 
 
 def render_optimization_center(

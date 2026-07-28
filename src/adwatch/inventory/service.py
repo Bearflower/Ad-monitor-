@@ -83,6 +83,7 @@ class InventoryService:
         shipped_on: date,
         unit_cost_cny: Decimal,
         order_status: str = "ready_to_ship",
+        cost_effective_date: date | None = None,
     ) -> bool:
         if order_status.lower() in {"cancelled", "canceled"}:
             return False
@@ -115,8 +116,9 @@ class InventoryService:
                 """
                 INSERT INTO order_cost_snapshots(
                     platform, store, order_id, seller_sku, quantity,
-                    unit_cost_cny, total_cost_cny, status, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, 'confirmed', ?)
+                    unit_cost_cny, total_cost_cny, cost_effective_date,
+                    status, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'confirmed', ?)
                 """,
                 (
                     platform,
@@ -126,6 +128,11 @@ class InventoryService:
                     quantity,
                     str(unit_cost_cny),
                     str(unit_cost_cny * quantity),
+                    (
+                        None
+                        if cost_effective_date is None
+                        else cost_effective_date.isoformat()
+                    ),
                     now,
                 ),
             )
@@ -144,6 +151,15 @@ class InventoryService:
         now = datetime.now(UTC).isoformat()
         source_id = f"{platform}:{store}:{order_id}"
         with self.database.transaction() as connection:
+            if not connection.execute(
+                """
+                SELECT 1 FROM inventory_movements
+                WHERE source_type='order' AND source_id=?
+                  AND seller_sku=? AND movement_type='sale_out'
+                """,
+                (source_id, seller_sku),
+            ).fetchone():
+                return False
             if connection.execute(
                 """
                 SELECT 1 FROM inventory_movements
@@ -163,6 +179,13 @@ class InventoryService:
                 source_id,
                 "",
                 now,
+            )
+            connection.execute(
+                """
+                UPDATE order_cost_snapshots SET status='returned'
+                WHERE platform=? AND store=? AND order_id=? AND seller_sku=?
+                """,
+                (platform, store, order_id, seller_sku),
             )
         return True
 

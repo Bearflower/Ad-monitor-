@@ -49,6 +49,7 @@ from adwatch.operations.launch_checklist import (
     render_launch_checklist,
 )
 from adwatch.operations.readiness import readiness_status
+from adwatch.orders.sync import OperationsSyncService
 from adwatch.pipeline.runner import PipelineRunner
 from adwatch.reconciliation.service import ReconciliationService
 from adwatch.reporting.delivery import deliver_report
@@ -162,6 +163,7 @@ def build_parser() -> argparse.ArgumentParser:
     export_pending.add_argument("--output", type=Path, required=True)
     import_sku = business_commands.add_parser("import-sku-costs")
     import_sku.add_argument("--file", type=Path, required=True)
+    business_commands.add_parser("sync-orders")
     run = subcommands.add_parser("run")
     workflows = run.add_subparsers(dest="workflow")
     daily = workflows.add_parser("daily")
@@ -730,6 +732,20 @@ def main(argv: list[str] | None = None) -> int:
                 count = import_sku_costs(database, args.file)
                 print(f"Imported {count} SKU costs")
                 return 0
+            if args.business_command == "sync-orders":
+                result = OperationsSyncService(database).sync()
+                print(
+                    f"shipped={result.shipped} returned={result.returned} "
+                    f"cancelled={result.cancelled} "
+                    f"pending_cost={result.pending_cost} "
+                    f"pending_inventory={result.pending_inventory} "
+                    f"unchanged={result.unchanged}"
+                )
+                return (
+                    2
+                    if result.pending_cost or result.pending_inventory
+                    else 0
+                )
         except BusinessInputError as error:
             print(f"Business input rejected: {error}")
             return 2
@@ -784,6 +800,7 @@ def main(argv: list[str] | None = None) -> int:
         write_quality_report(
             settings.report_dir, args.date, args.mode, summaries
         )
+        order_sync = OperationsSyncService(database).sync()
         analysis = AnalysisService(database)
         if args.mode == "mock":
             analysis.seed_mock_business_data(args.date)
@@ -802,6 +819,8 @@ def main(argv: list[str] | None = None) -> int:
         print(
             f"daily_run={run_status} metrics={analysis_summary.metrics_processed} "
             f"recommendations={analysis_summary.recommendations} "
+            f"orders_shipped={order_sync.shipped} "
+            f"orders_pending_cost={order_sync.pending_cost} "
             f"delivery={delivery.status} report={delivery.path}"
         )
         return 2 if collection_errors else 0

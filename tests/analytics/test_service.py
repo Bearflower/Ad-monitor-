@@ -164,9 +164,7 @@ def test_three_recent_webdriver_failures_open_circuit(tmp_path):
 
     for _ in range(3):
         try:
-            PipelineRunner(database).run(
-                FailingCollector(), date(2026, 7, 23)
-            )
+            PipelineRunner(database).run(FailingCollector(), date(2026, 7, 23))
         except RuntimeError:
             pass
 
@@ -450,3 +448,63 @@ def test_multiple_metrics_flag_ambiguous_order_cost_allocation(tmp_path):
             """
         ).fetchone()[0]
     assert count == 2
+
+
+def test_analysis_reads_confirmed_inventory_cost_snapshot(tmp_path):
+    data_date = date(2026, 7, 23)
+    database = Database(tmp_path / "test.sqlite3")
+    database.migrate()
+
+    class Collector:
+        source = "test"
+        platform = Platform.SHOPEE
+
+        def collect(self, day):
+            return [
+                DailyAdMetric(
+                    platform=self.platform,
+                    store="shop",
+                    account_id="account",
+                    campaign_id="campaign",
+                    sku_id="SKU-1",
+                    data_date=day,
+                    currency="CNY",
+                    spend=Decimal(20),
+                    attributed_gmv=Decimal(100),
+                    orders=1,
+                    source=self.source,
+                )
+            ]
+
+    PipelineRunner(database).run(Collector(), data_date)
+    AnalysisService(database).seed_mock_business_data(data_date)
+    with database.transaction() as connection:
+        connection.execute(
+            """
+            INSERT INTO order_cost_snapshots(
+                platform, store, order_id, seller_sku, quantity,
+                unit_cost_cny, total_cost_cny, cost_effective_date,
+                status, created_at
+            ) VALUES (
+                'shopee','shop','ORDER-1','SKU-1',2,
+                '5','10','2026-07-01','confirmed',
+                '2026-07-24T00:00:00Z'
+            )
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO inventory_movements(
+                id, seller_sku, movement_type, quantity_delta,
+                occurred_on, source_type, source_id, note, created_at
+            ) VALUES (
+                'move-1','SKU-1','sale_out',-2,'2026-07-23',
+                'order','shopee:shop:ORDER-1','',
+                '2026-07-24T00:00:00Z'
+            )
+            """
+        )
+
+    row = AnalyticsRepository(database).load_analysis_rows(data_date)[0]
+
+    assert Decimal(row["order_product_cost_cny"]) == Decimal(10)

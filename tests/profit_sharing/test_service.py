@@ -92,3 +92,66 @@ def test_confirm_period_and_record_partial_payment(sharing):
             (payment,),
         ).fetchone()
     assert dict(row) == {"amount_cny": "300.00", "status": "paid"}
+
+
+def test_period_from_ledger_excludes_purchase_and_ad_recharge(sharing):
+    service, database = sharing
+    service.create_agreement(
+        effective_from=date(2026, 1, 1),
+        shares={"洁云": Decimal("0.60"), "苏姐": Decimal("0.40")},
+        actor="yl",
+    )
+    with database.transaction() as connection:
+        connection.execute(
+            """
+            INSERT INTO settlement_records VALUES(
+              's1','shopee','shop','O1','2026-07-10',
+              '1000','CNY','1','1000','cli','2026-07-10T00:00:00Z')
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO order_cost_snapshots VALUES(
+              'shopee','shop','O1','SKU-1',1,'300','300',NULL,
+              'confirmed','2026-08-01T00:00:00Z')
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO inventory_movements VALUES(
+              'move1','SKU-1','sale_out',-1,'2026-07-10','order',
+              'shopee:shop:O1','','2026-08-01T00:00:00Z')
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO ad_spend_entries VALUES(
+              'ad1','shopee','shop','C1','100','CNY','1','100',
+              '2026-07-10','cli','ad-ext','2026-07-10T00:00:00Z')
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO purchase_receipts VALUES(
+              'PO1','factory','2026-07-01','confirmed','yl',
+              '2026-07-01T00:00:00Z')
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO ad_funding_entries VALUES(
+              'fund1','shopee','shop','recharge','500','CNY','1','500',
+              '2026-07-01','manual',NULL,'confirmed',
+              '2026-07-01T00:00:00Z')
+            """
+        )
+    period = service.create_period_from_ledger(
+        starts_on=date(2026, 7, 1),
+        ends_on=date(2026, 7, 31),
+        actor="yl",
+    )
+    with database.connect() as connection:
+        row = connection.execute(
+            "SELECT net_profit_cny FROM profit_periods WHERE id=?", (period,)
+        ).fetchone()
+    assert row["net_profit_cny"] == "600.00"

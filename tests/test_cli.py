@@ -218,6 +218,29 @@ def test_order_costs_satisfy_launch_business_cost_gate(
     assert "business_costs" not in capsys.readouterr().out
 
 
+def test_business_sync_orders_reports_pending_facts(
+    tmp_path, monkeypatch, capsys
+):
+    settings = Settings(data_dir=tmp_path)
+    monkeypatch.setattr(adwatch.cli.Settings, "from_env", lambda: settings)
+    database = Database(settings.database_path)
+    database.migrate()
+    with database.transaction() as connection:
+        connection.execute(
+            """
+            INSERT INTO platform_order_lines VALUES(
+              'shopee','shop','ORDER-1','item','model','SKU-1',
+              '1 bag','Product',1,'100','THB','completed','delivered','',
+              '2026-07-23','2026-07-24T00:00:00Z')
+            """
+        )
+
+    assert main(["business", "sync-orders"]) == 2
+
+    output = capsys.readouterr().out
+    assert "pending_cost=1" in output
+
+
 def test_weekly_report_cli_writes_local_file(tmp_path, monkeypatch):
     settings = Settings(data_dir=tmp_path)
     monkeypatch.setattr(adwatch.cli.Settings, "from_env", lambda: settings)

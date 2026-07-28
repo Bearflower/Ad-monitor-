@@ -72,6 +72,29 @@ class DashboardRouter:
                     actor="local-web",
                 )
                 return RouteResponse(303, location="/profit-sharing")
+            if path == "/profit-periods" and self.profit_sharing:
+                self.profit_sharing.create_period_from_ledger(
+                    starts_on=date.fromisoformat(form["starts_on"]),
+                    ends_on=date.fromisoformat(form["ends_on"]),
+                    actor="local-web",
+                )
+                return RouteResponse(303, location="/profit-sharing")
+            if path == "/profit-payments" and self.profit_sharing:
+                self.profit_sharing.record_payment(
+                    period_id=form["period_id"],
+                    partner=form["partner"],
+                    amount_cny=Decimal(form["amount_cny"]),
+                    paid_on=date.fromisoformat(form["paid_on"]),
+                    status=form["status"],
+                    note=form.get("note", ""),
+                    actor="local-web",
+                )
+                return RouteResponse(303, location="/profit-sharing")
+            if path == "/profit-periods/confirm" and self.profit_sharing:
+                self.profit_sharing.confirm_period(
+                    form["period_id"], actor="local-web"
+                )
+                return RouteResponse(303, location="/profit-sharing")
             occurred_on = date.fromisoformat(form["occurred_on"])
             if path == "/capital":
                 self.ledger.create_capital(

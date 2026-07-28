@@ -145,3 +145,39 @@ def test_inventory_sku_cost_and_profit_routes_are_writable(tmp_path):
             "sujie_share": "0.40",
         },
     ).status == 303
+    with database.transaction() as connection:
+        connection.execute(
+            """
+            INSERT INTO settlement_records VALUES(
+              'settlement-1','shopee','shop','ORDER-1','2026-07-28',
+              '100','CNY','1','100','manual','2026-07-28T00:00:00Z')
+            """
+        )
+    assert router.post(
+        "/profit-periods",
+        {
+            **common,
+            "starts_on": "2026-07-01",
+            "ends_on": "2026-07-31",
+        },
+    ).status == 303
+    with database.connect() as connection:
+        period_id = connection.execute(
+            "SELECT id FROM profit_periods"
+        ).fetchone()[0]
+    assert router.post(
+        "/profit-periods/confirm",
+        {**common, "period_id": period_id},
+    ).status == 303
+    assert router.post(
+        "/profit-payments",
+        {
+            **common,
+            "period_id": period_id,
+            "partner": "洁云",
+            "amount_cny": "10",
+            "paid_on": "2026-07-31",
+            "status": "paid",
+            "note": "首笔",
+        },
+    ).status == 303
