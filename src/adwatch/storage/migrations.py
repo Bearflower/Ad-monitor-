@@ -607,4 +607,45 @@ MIGRATIONS = [
         );
         """,
     ),
+    (
+        17,
+        """
+        CREATE TABLE sku_fulfillment_history (
+            platform TEXT NOT NULL,
+            store TEXT NOT NULL,
+            seller_sku TEXT NOT NULL,
+            effective_date TEXT NOT NULL,
+            mode TEXT NOT NULL CHECK(
+                mode IN ('supplier_fulfilled', 'stocked')
+            ),
+            supply_status TEXT NOT NULL CHECK(
+                supply_status IN ('available', 'paused')
+            ),
+            note TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL,
+            PRIMARY KEY(platform, store, seller_sku, effective_date)
+        );
+        CREATE INDEX sku_fulfillment_effective_idx
+        ON sku_fulfillment_history(
+            platform, store, seller_sku, effective_date
+        );
+
+        CREATE TABLE order_fulfillment_snapshots (
+            platform TEXT NOT NULL,
+            store TEXT NOT NULL,
+            order_id TEXT NOT NULL,
+            seller_sku TEXT NOT NULL,
+            mode TEXT NOT NULL CHECK(
+                mode IN ('supplier_fulfilled', 'stocked')
+            ),
+            policy_effective_date TEXT NOT NULL,
+            supply_status TEXT NOT NULL CHECK(
+                supply_status IN ('available', 'paused')
+            ),
+            resolution_source TEXT NOT NULL DEFAULT 'sku_policy',
+            created_at TEXT NOT NULL,
+            PRIMARY KEY(platform, store, order_id, seller_sku)
+        );
+        """,
+    ),
 ]
