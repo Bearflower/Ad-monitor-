@@ -8,6 +8,7 @@ from decimal import Decimal
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
+from adwatch.dashboard.views import render_navigation
 from adwatch.reporting.read_model import DailySnapshot, ReportReadModel
 from adwatch.storage.db import Database
 
@@ -180,6 +181,7 @@ def render_dashboard(
     <p class="subtitle">{data_date.isoformat()} · {scope_label}</p></div>
     <span class="badge">{source_badge}</span></header>
   <main id="main">
+    {render_navigation("/")}
     <form method="get" class="panel" aria-label="筛选">
       <label>日期 <input name="date" type="date"
         value="{data_date.isoformat()}"></label>
