@@ -9,7 +9,7 @@ from xml.etree import ElementTree
 from adwatch.storage.db import Database
 
 ECB_HISTORY_URL = (
-    "https://www.ecb.europa.eu/stats/eurofxref/eurofxref-hist.xml"
+    "https://www.ecb.europa.eu/stats/eurofxref/eurofxref-hist-90d.xml"
 )
 
 
