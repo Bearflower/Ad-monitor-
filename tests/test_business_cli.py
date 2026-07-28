@@ -134,3 +134,20 @@ def test_business_order_cost_commands(tmp_path, monkeypatch, capsys):
     output = capsys.readouterr().out
     assert "2026-07-23 shopee no4kud44da -> 虾皮泰国" in output
     assert "orders=1 units=1 total_cost_cny=5.00" in output
+
+
+def test_business_pending_sku_cost_commands(tmp_path, monkeypatch, capsys):
+    settings = _settings(tmp_path)
+    monkeypatch.setattr(Settings, "from_env", lambda: settings)
+    output = tmp_path / "pending.xlsx"
+
+    assert main(
+        [
+            "business",
+            "export-pending-sku-costs",
+            "--output",
+            str(output),
+        ]
+    ) == 0
+    assert output.is_file()
+    assert "Exported 0 pending SKU costs" in capsys.readouterr().out

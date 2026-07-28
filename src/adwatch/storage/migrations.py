@@ -319,4 +319,73 @@ MIGRATIONS = [
         );
         """,
     ),
+    (
+        9,
+        """
+        CREATE TABLE platform_order_lines (
+            platform TEXT NOT NULL,
+            store TEXT NOT NULL,
+            order_id TEXT NOT NULL,
+            item_id TEXT NOT NULL,
+            model_id TEXT NOT NULL,
+            seller_sku TEXT NOT NULL,
+            variation_name TEXT NOT NULL,
+            product_name TEXT NOT NULL,
+            quantity INTEGER NOT NULL CHECK(quantity > 0),
+            buyer_paid TEXT NOT NULL DEFAULT '0',
+            currency TEXT NOT NULL,
+            order_status TEXT NOT NULL,
+            logistics_status TEXT NOT NULL,
+            refund_status TEXT NOT NULL,
+            ordered_at TEXT NOT NULL,
+            source_updated_at TEXT NOT NULL,
+            PRIMARY KEY(platform, store, order_id, item_id, model_id)
+        );
+
+        CREATE INDEX platform_order_lines_date_idx
+        ON platform_order_lines(platform, store, ordered_at);
+
+        CREATE TABLE platform_sku_mappings (
+            platform TEXT NOT NULL,
+            store TEXT NOT NULL,
+            item_id TEXT NOT NULL,
+            model_id TEXT NOT NULL,
+            seller_sku TEXT NOT NULL,
+            variation_name TEXT NOT NULL,
+            product_name TEXT NOT NULL,
+            inventory_units INTEGER NOT NULL CHECK(inventory_units >= 0),
+            observed_at TEXT NOT NULL,
+            PRIMARY KEY(platform, store, item_id, model_id)
+        );
+
+        CREATE UNIQUE INDEX platform_sku_seller_idx
+        ON platform_sku_mappings(platform, store, seller_sku);
+
+        CREATE TABLE sku_cost_history (
+            platform TEXT NOT NULL,
+            store TEXT NOT NULL,
+            seller_sku TEXT NOT NULL,
+            effective_date TEXT NOT NULL,
+            unit_cost_cny TEXT NOT NULL,
+            note TEXT NOT NULL DEFAULT '',
+            updated_at TEXT NOT NULL DEFAULT (
+                strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+            ),
+            PRIMARY KEY(platform, store, seller_sku, effective_date)
+        );
+
+        CREATE TABLE order_sync_runs (
+            id TEXT PRIMARY KEY,
+            platform TEXT NOT NULL,
+            store TEXT NOT NULL,
+            started_at TEXT NOT NULL,
+            finished_at TEXT,
+            status TEXT NOT NULL,
+            order_count INTEGER NOT NULL DEFAULT 0,
+            sku_count INTEGER NOT NULL DEFAULT 0,
+            rejected_count INTEGER NOT NULL DEFAULT 0,
+            error_message TEXT
+        );
+        """,
+    ),
 ]

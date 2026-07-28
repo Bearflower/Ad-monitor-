@@ -17,6 +17,10 @@ from adwatch.analytics.order_costs import (
     map_store,
     order_cost_summary,
 )
+from adwatch.analytics.sku_cost_workbook import (
+    export_pending_sku_costs,
+    import_sku_costs,
+)
 from adwatch.analytics.service import AnalysisService
 from adwatch.approval.server import serve_callback
 from adwatch.collectors.mock import MockCollector
@@ -148,6 +152,12 @@ def build_parser() -> argparse.ArgumentParser:
     order_summary.add_argument(
         "--to", dest="end", type=date.fromisoformat, required=True
     )
+    export_pending = business_commands.add_parser(
+        "export-pending-sku-costs"
+    )
+    export_pending.add_argument("--output", type=Path, required=True)
+    import_sku = business_commands.add_parser("import-sku-costs")
+    import_sku.add_argument("--file", type=Path, required=True)
     run = subcommands.add_parser("run")
     workflows = run.add_subparsers(dest="workflow")
     daily = workflows.add_parser("daily")
@@ -594,6 +604,16 @@ def main(argv: list[str] | None = None) -> int:
                         f"orders={row.orders} units={row.units} "
                         f"total_cost_cny={row.total_cost_cny:.2f}"
                     )
+                return 0
+            if args.business_command == "export-pending-sku-costs":
+                count = export_pending_sku_costs(database, args.output)
+                print(
+                    f"Exported {count} pending SKU costs: {args.output}"
+                )
+                return 0
+            if args.business_command == "import-sku-costs":
+                count = import_sku_costs(database, args.file)
+                print(f"Imported {count} SKU costs")
                 return 0
         except BusinessInputError as error:
             print(f"Business input rejected: {error}")
