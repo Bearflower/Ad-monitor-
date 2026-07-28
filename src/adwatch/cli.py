@@ -357,8 +357,12 @@ def main(argv: list[str] | None = None) -> int:
                     EXISTS(SELECT 1 FROM platform_order_lines)
                     AND NOT EXISTS(
                         SELECT 1 FROM platform_order_lines AS orders
-                        WHERE TRIM(orders.seller_sku)=''
-                           OR NOT EXISTS(
+                        WHERE lower(orders.order_status) NOT IN (
+                                'cancelled', 'canceled'
+                            )
+                          AND (
+                            TRIM(orders.seller_sku)=''
+                            OR NOT EXISTS(
                                SELECT 1 FROM sku_cost_history AS cost
                                WHERE cost.platform=orders.platform
                                  AND cost.store=orders.store
@@ -376,6 +380,7 @@ def main(argv: list[str] | None = None) -> int:
                                  AND fulfillment.effective_date<=
                                      substr(orders.ordered_at, 1, 10)
                            )
+                          )
                     )
                 )
                 """

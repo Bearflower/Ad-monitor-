@@ -264,6 +264,29 @@ def test_supplier_sku_facts_clear_mapping_refund_and_inventory_gates(
     assert "inventory_source" not in output
 
 
+def test_cancelled_order_without_sku_facts_does_not_block_mapping_gate(
+    tmp_path, monkeypatch, capsys
+):
+    settings = Settings(data_dir=tmp_path)
+    monkeypatch.setattr(adwatch.cli.Settings, "from_env", lambda: settings)
+    monkeypatch.setattr(adwatch.cli, "_ziniao_bridge_ready", lambda: True)
+    database = Database(settings.database_path)
+    database.migrate()
+    with database.transaction() as connection:
+        connection.execute(
+            """
+            INSERT INTO platform_order_lines VALUES(
+              'shopee','shop','CANCELLED-1','OLD-SKU','OLD-SKU','OLD-SKU',
+              '1 bag','Product',1,'100','THB','cancelled','cancelled',
+              '','2026-07-23','2026-07-24T00:00:00Z')
+            """
+        )
+
+    assert main(["launch-checklist", "--format", "markdown"]) == 0
+
+    assert "sku_mapping" not in capsys.readouterr().out
+
+
 def test_business_sync_exchange_rates(tmp_path, monkeypatch, capsys):
     settings = Settings(data_dir=tmp_path)
     monkeypatch.setattr(adwatch.cli.Settings, "from_env", lambda: settings)
