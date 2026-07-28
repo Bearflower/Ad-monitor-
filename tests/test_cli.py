@@ -222,6 +222,105 @@ def test_order_costs_satisfy_launch_business_cost_gate(
     assert "business_costs" not in capsys.readouterr().out
 
 
+def test_supplier_sku_facts_clear_mapping_refund_and_inventory_gates(
+    tmp_path, monkeypatch, capsys
+):
+    settings = Settings(data_dir=tmp_path)
+    monkeypatch.setattr(adwatch.cli.Settings, "from_env", lambda: settings)
+    monkeypatch.setattr(adwatch.cli, "_ziniao_bridge_ready", lambda: True)
+    database = Database(settings.database_path)
+    database.migrate()
+    with database.transaction() as connection:
+        connection.execute(
+            """
+            INSERT INTO sku_cost_history VALUES(
+              'shopee','shop','SKU-1','2026-07-01','5','',
+              '2026-07-01T00:00:00Z')
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO sku_fulfillment_history VALUES(
+              'shopee','shop','SKU-1','2026-07-01',
+              'supplier_fulfilled','available','',
+              '2026-07-01T00:00:00Z')
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO platform_order_lines VALUES(
+              'shopee','shop','ORDER-1','SKU-1','SKU-1','SKU-1',
+              '1 bag','Product',1,'100','THB','completed','delivered',
+              'returned','2026-07-23','2026-07-24T00:00:00Z')
+            """
+        )
+
+    assert main(["launch-checklist", "--format", "markdown"]) == 0
+
+    output = capsys.readouterr().out
+    assert "business_costs" not in output
+    assert "sku_mapping" not in output
+    assert "refund_source" not in output
+    assert "inventory_source" not in output
+
+
+def test_business_sync_exchange_rates(tmp_path, monkeypatch, capsys):
+    settings = Settings(data_dir=tmp_path)
+    monkeypatch.setattr(adwatch.cli.Settings, "from_env", lambda: settings)
+    monkeypatch.setattr(
+        adwatch.cli.EcbExchangeRateSource,
+        "fetch_range",
+        lambda self, currency, start, end: {
+            start: Decimal("0.201"),
+            end: Decimal("0.202"),
+        },
+    )
+
+    assert (
+        main(
+            [
+                "business",
+                "sync-exchange-rates",
+                "--currency",
+                "THB",
+                "--from",
+                "2026-07-26",
+                "--to",
+                "2026-07-27",
+            ]
+        )
+        == 0
+    )
+
+    assert "Synced 2 THB/CNY exchange rates" in capsys.readouterr().out
+
+
+def test_business_sync_exchange_rates_reports_network_failure(
+    tmp_path, monkeypatch, capsys
+):
+    settings = Settings(data_dir=tmp_path)
+    monkeypatch.setattr(adwatch.cli.Settings, "from_env", lambda: settings)
+    monkeypatch.setattr(
+        adwatch.cli.EcbExchangeRateSource,
+        "fetch_range",
+        lambda *args, **kwargs: (_ for _ in ()).throw(OSError("offline")),
+    )
+
+    result = main(
+        [
+            "business",
+            "sync-exchange-rates",
+            "--from",
+            "2026-07-26",
+            "--to",
+            "2026-07-27",
+        ]
+    )
+
+    assert result == 2
+    assert "Exchange-rate sync failed: offline" in capsys.readouterr().out
+
+
 def test_business_sync_orders_reports_pending_facts(
     tmp_path, monkeypatch, capsys
 ):

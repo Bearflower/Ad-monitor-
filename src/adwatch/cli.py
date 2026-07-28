@@ -42,6 +42,10 @@ from adwatch.execution.policy import (
     PolicyError,
 )
 from adwatch.execution.ziniao_backend import ZiniaoExecutionBackend
+from adwatch.integrations.exchange_rates import (
+    EcbExchangeRateSource,
+    sync_exchange_rates,
+)
 from adwatch.operations.backup import create_backup, verify_backup
 from adwatch.operations.launch_checklist import (
     LaunchReadiness,
@@ -165,6 +169,14 @@ def build_parser() -> argparse.ArgumentParser:
     import_sku = business_commands.add_parser("import-sku-costs")
     import_sku.add_argument("--file", type=Path, required=True)
     business_commands.add_parser("sync-orders")
+    sync_rates = business_commands.add_parser("sync-exchange-rates")
+    sync_rates.add_argument("--currency", default="THB")
+    sync_rates.add_argument(
+        "--from", dest="start", type=date.fromisoformat, required=True
+    )
+    sync_rates.add_argument(
+        "--to", dest="end", type=date.fromisoformat, required=True
+    )
     set_fulfillment = business_commands.add_parser("set-fulfillment")
     set_fulfillment.add_argument("--platform", required=True)
     set_fulfillment.add_argument("--store", required=True)
@@ -329,18 +341,64 @@ def main(argv: list[str] | None = None) -> int:
                 SELECT 1
                 WHERE EXISTS(SELECT 1 FROM product_costs)
                    OR EXISTS(SELECT 1 FROM order_cost_lines)
+                   OR EXISTS(SELECT 1 FROM sku_cost_history)
+                   OR EXISTS(SELECT 1 FROM order_cost_snapshots)
                 """
             )
             has_sku_mapping = exists(
                 """
-                SELECT 1 FROM sku_mappings
-                WHERE tiktok_product_id IS NOT NULL
-                   OR shopee_product_id IS NOT NULL
-                LIMIT 1
+                SELECT 1
+                WHERE EXISTS(
+                    SELECT 1 FROM sku_mappings
+                    WHERE tiktok_product_id IS NOT NULL
+                       OR shopee_product_id IS NOT NULL
+                )
+                OR (
+                    EXISTS(SELECT 1 FROM platform_order_lines)
+                    AND NOT EXISTS(
+                        SELECT 1 FROM platform_order_lines AS orders
+                        WHERE TRIM(orders.seller_sku)=''
+                           OR NOT EXISTS(
+                               SELECT 1 FROM sku_cost_history AS cost
+                               WHERE cost.platform=orders.platform
+                                 AND cost.store=orders.store
+                                 AND cost.seller_sku=orders.seller_sku
+                                 AND cost.effective_date<=
+                                     substr(orders.ordered_at, 1, 10)
+                           )
+                           OR NOT EXISTS(
+                               SELECT 1
+                               FROM sku_fulfillment_history AS fulfillment
+                               WHERE fulfillment.platform=orders.platform
+                                 AND fulfillment.store=orders.store
+                                 AND fulfillment.seller_sku=
+                                     orders.seller_sku
+                                 AND fulfillment.effective_date<=
+                                     substr(orders.ordered_at, 1, 10)
+                           )
+                    )
+                )
                 """
             )
-            has_inventory = exists(
-                "SELECT 1 FROM inventory_snapshots LIMIT 1"
+            has_order_status_source = exists(
+                "SELECT 1 FROM platform_order_lines LIMIT 1"
+            )
+            inventory_not_applicable = exists(
+                """
+                SELECT 1
+                WHERE EXISTS(SELECT 1 FROM sku_fulfillment_history)
+                  AND NOT EXISTS(
+                      SELECT 1 FROM sku_fulfillment_history
+                      WHERE mode='stocked'
+                  )
+                """
+            )
+            has_inventory = inventory_not_applicable or exists(
+                """
+                SELECT 1
+                WHERE EXISTS(SELECT 1 FROM inventory_snapshots)
+                   OR EXISTS(SELECT 1 FROM inventory_balances)
+                """
             )
             has_exchange_rate = exists(
                 "SELECT 1 FROM exchange_rates LIMIT 1"
@@ -390,6 +448,7 @@ def main(argv: list[str] | None = None) -> int:
             sku_mapping=has_sku_mapping,
             refund_source=(
                 settings_rows.get("refund_source_configured") == "true"
+                or has_order_status_source
             ),
             inventory_source=has_inventory,
             exchange_rate_source=has_exchange_rate,
@@ -792,6 +851,23 @@ def main(argv: list[str] | None = None) -> int:
                     f"fulfillment={args.platform.lower()}:{args.store}:"
                     f"{args.sku} mode={args.mode} "
                     f"effective={args.effective_date.isoformat()}"
+                )
+                return 0
+            if args.business_command == "sync-exchange-rates":
+                try:
+                    count = sync_exchange_rates(
+                        database,
+                        EcbExchangeRateSource(),
+                        currency=args.currency,
+                        start=args.start,
+                        end=args.end,
+                    )
+                except (OSError, ValueError) as error:
+                    print(f"Exchange-rate sync failed: {error}")
+                    return 2
+                print(
+                    f"Synced {count} {args.currency.upper()}/CNY "
+                    "exchange rates from ECB"
                 )
                 return 0
             if (

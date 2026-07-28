@@ -102,6 +102,8 @@ data_date,total_product_cost,refund_amount
   --platform shopee --source no4kud44da --target 虾皮泰国
 .venv/bin/adwatch business order-summary \
   --from 2026-07-08 --to 2026-07-17
+.venv/bin/adwatch business sync-exchange-rates \
+  --currency THB --from 2026-07-01 --to 2026-07-31
 ```
 
 表头固定为 `日期,平台,店铺,订单号,SKU,数量,单件成本_人民币`。`数量`
@@ -109,6 +111,8 @@ data_date,total_product_cost,refund_amount
 `17`；只有购买两个完整的 `5 bags` 规格时数量才填写 `2`。同一订单的
 不同 SKU 使用相同订单号分多行。重复导入采用幂等更新，不重复累计成本。
 订单成本已经是人民币，利润分析不会再次按泰铢汇率换算。
+广告收入和广告消耗使用欧洲中央银行每日参考汇率折算成人民币；周末和休市日
+沿用最近一个已公布工作日的汇率。
 
 ## 报告、备份与上线检查
 
