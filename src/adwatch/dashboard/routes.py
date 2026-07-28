@@ -6,6 +6,7 @@ from adwatch.inventory.models import PurchaseLine
 from adwatch.inventory.service import InventoryService
 from adwatch.ledger.models import ExpenseDraft
 from adwatch.ledger.service import LedgerError, LedgerService
+from adwatch.orders.fulfillment import FulfillmentService
 from adwatch.orders.repository import OrderRepository
 from adwatch.profit_sharing.service import ProfitSharingService
 
@@ -25,18 +26,31 @@ class DashboardRouter:
         csrf_token: str,
         inventory: InventoryService | None = None,
         orders: OrderRepository | None = None,
+        fulfillment: FulfillmentService | None = None,
         profit_sharing: ProfitSharingService | None = None,
     ) -> None:
         self.ledger = ledger
         self.csrf_token = csrf_token
         self.inventory = inventory
         self.orders = orders
+        self.fulfillment = fulfillment
         self.profit_sharing = profit_sharing
 
     def post(self, path: str, form: dict[str, str]) -> RouteResponse:
         if form.get("csrf_token") != self.csrf_token:
             return RouteResponse(403, message="invalid CSRF token")
         try:
+            if path == "/fulfillment" and self.fulfillment:
+                self.fulfillment.set_policy(
+                    platform=form["platform"],
+                    store=form["store"],
+                    seller_sku=form["seller_sku"],
+                    effective_date=date.fromisoformat(form["effective_date"]),
+                    mode=form["mode"],
+                    supply_status=form["supply_status"],
+                    note=form.get("note", ""),
+                )
+                return RouteResponse(303, location="/inventory")
             if path == "/sku-costs" and self.orders:
                 self.orders.set_sku_cost(
                     platform=form["platform"],

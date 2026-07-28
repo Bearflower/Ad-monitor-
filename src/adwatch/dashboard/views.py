@@ -93,6 +93,23 @@ def render_operations_forms(csrf_token: str) -> str:
       </form>
     </section>
     <section class="panel"><h2>SKU 成本与采购入库</h2>
+      <form method="post" action="/fulfillment">
+        <input type="hidden" name="csrf_token" value="{token}">
+        <input name="platform" placeholder="平台" required>
+        <input name="store" placeholder="店铺" required>
+        <input name="seller_sku" placeholder="Seller SKU" required>
+        <input type="date" name="effective_date" required>
+        <select name="mode">
+          <option value="supplier_fulfilled">货盘代发</option>
+          <option value="stocked">自有备货</option>
+        </select>
+        <select name="supply_status">
+          <option value="available">可供货</option>
+          <option value="paused">暂停供货</option>
+        </select>
+        <input name="note" placeholder="履约备注">
+        <button>新增履约方式版本</button>
+      </form>
       <form method="post" action="/sku-costs">
         <input type="hidden" name="csrf_token" value="{token}">
         <input name="platform" placeholder="平台" required>

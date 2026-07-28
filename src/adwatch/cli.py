@@ -49,6 +49,7 @@ from adwatch.operations.launch_checklist import (
     render_launch_checklist,
 )
 from adwatch.operations.readiness import readiness_status
+from adwatch.orders.fulfillment import FulfillmentService
 from adwatch.orders.sync import OperationsSyncService
 from adwatch.pipeline.runner import PipelineRunner
 from adwatch.reconciliation.service import ReconciliationService
@@ -164,6 +165,30 @@ def build_parser() -> argparse.ArgumentParser:
     import_sku = business_commands.add_parser("import-sku-costs")
     import_sku.add_argument("--file", type=Path, required=True)
     business_commands.add_parser("sync-orders")
+    set_fulfillment = business_commands.add_parser("set-fulfillment")
+    set_fulfillment.add_argument("--platform", required=True)
+    set_fulfillment.add_argument("--store", required=True)
+    set_fulfillment.add_argument("--sku", required=True)
+    set_fulfillment.add_argument(
+        "--effective-date", type=date.fromisoformat, required=True
+    )
+    set_fulfillment.add_argument(
+        "--mode",
+        choices=("supplier_fulfilled", "stocked"),
+        required=True,
+    )
+    set_fulfillment.add_argument(
+        "--supply-status",
+        choices=("available", "paused"),
+        default="available",
+    )
+    set_fulfillment.add_argument("--note", default="")
+    bulk_fulfillment = business_commands.add_parser(
+        "mark-current-skus-supplier-fulfilled"
+    )
+    bulk_fulfillment.add_argument("--platform", required=True)
+    bulk_fulfillment.add_argument("--store", required=True)
+    bulk_fulfillment.add_argument("--note", default="现有货盘SKU")
     run = subcommands.add_parser("run")
     workflows = run.add_subparsers(dest="workflow")
     daily = workflows.add_parser("daily")
@@ -735,17 +760,53 @@ def main(argv: list[str] | None = None) -> int:
             if args.business_command == "sync-orders":
                 result = OperationsSyncService(database).sync()
                 print(
-                    f"shipped={result.shipped} returned={result.returned} "
+                    f"shipped={result.shipped} "
+                    f"supplier_costed={result.supplier_costed} "
+                    f"returned={result.returned} "
                     f"cancelled={result.cancelled} "
                     f"pending_cost={result.pending_cost} "
+                    f"pending_fulfillment={result.pending_fulfillment} "
                     f"pending_inventory={result.pending_inventory} "
                     f"unchanged={result.unchanged}"
                 )
                 return (
                     2
-                    if result.pending_cost or result.pending_inventory
+                    if (
+                        result.pending_cost
+                        or result.pending_fulfillment
+                        or result.pending_inventory
+                    )
                     else 0
                 )
+            if args.business_command == "set-fulfillment":
+                FulfillmentService(database).set_policy(
+                    platform=args.platform,
+                    store=args.store,
+                    seller_sku=args.sku,
+                    effective_date=args.effective_date,
+                    mode=args.mode,
+                    supply_status=args.supply_status,
+                    note=args.note,
+                )
+                print(
+                    f"fulfillment={args.platform.lower()}:{args.store}:"
+                    f"{args.sku} mode={args.mode} "
+                    f"effective={args.effective_date.isoformat()}"
+                )
+                return 0
+            if (
+                args.business_command
+                == "mark-current-skus-supplier-fulfilled"
+            ):
+                count = FulfillmentService(
+                    database
+                ).mark_current_skus_supplier_fulfilled(
+                    platform=args.platform,
+                    store=args.store,
+                    note=args.note,
+                )
+                print(f"marked_supplier_fulfilled={count}")
+                return 0
         except BusinessInputError as error:
             print(f"Business input rejected: {error}")
             return 2

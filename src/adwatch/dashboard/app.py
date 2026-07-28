@@ -17,6 +17,7 @@ from adwatch.dashboard.views import (
 )
 from adwatch.inventory.service import InventoryService
 from adwatch.ledger.service import LedgerService
+from adwatch.orders.fulfillment import FulfillmentService
 from adwatch.orders.repository import OrderRepository
 from adwatch.profit_sharing.service import ProfitSharingService
 from adwatch.reporting.read_model import DailySnapshot, ReportReadModel
@@ -252,6 +253,7 @@ def serve(
         csrf_token=csrf_token,
         inventory=InventoryService(database),
         orders=OrderRepository(database),
+        fulfillment=FulfillmentService(database),
         profit_sharing=ProfitSharingService(database),
     )
     module_pages = {

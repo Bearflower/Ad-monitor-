@@ -1,6 +1,10 @@
+from datetime import date
+from decimal import Decimal
+
 import adwatch.cli
 from adwatch.cli import main
 from adwatch.config import Settings
+from adwatch.orders.repository import OrderRepository
 from adwatch.storage.db import Database
 
 
@@ -239,6 +243,60 @@ def test_business_sync_orders_reports_pending_facts(
 
     output = capsys.readouterr().out
     assert "pending_cost=1" in output
+
+
+def test_business_fulfillment_cli_sets_single_and_bulk_policies(
+    tmp_path, monkeypatch, capsys
+):
+    settings = Settings(data_dir=tmp_path)
+    monkeypatch.setattr(adwatch.cli.Settings, "from_env", lambda: settings)
+    database = Database(settings.database_path)
+    database.migrate()
+    OrderRepository(database).set_sku_cost(
+        platform="shopee",
+        store="shop",
+        seller_sku="SKU-1",
+        effective_date=date(2026, 4, 1),
+        unit_cost_cny=Decimal(5),
+    )
+
+    assert (
+        main(
+            [
+                "business",
+                "set-fulfillment",
+                "--platform",
+                "shopee",
+                "--store",
+                "shop",
+                "--sku",
+                "SKU-1",
+                "--effective-date",
+                "2026-08-01",
+                "--mode",
+                "stocked",
+                "--supply-status",
+                "available",
+            ]
+        )
+        == 0
+    )
+    assert (
+        main(
+            [
+                "business",
+                "mark-current-skus-supplier-fulfilled",
+                "--platform",
+                "shopee",
+                "--store",
+                "shop",
+            ]
+        )
+        == 0
+    )
+    output = capsys.readouterr().out
+    assert "mode=stocked" in output
+    assert "marked_supplier_fulfilled=1" in output
 
 
 def test_weekly_report_cli_writes_local_file(tmp_path, monkeypatch):

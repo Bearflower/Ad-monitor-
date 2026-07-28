@@ -1,6 +1,7 @@
 from adwatch.dashboard.routes import DashboardRouter
 from adwatch.inventory.service import InventoryService
 from adwatch.ledger.service import LedgerService
+from adwatch.orders.fulfillment import FulfillmentService
 from adwatch.orders.repository import OrderRepository
 from adwatch.profit_sharing.service import ProfitSharingService
 from adwatch.storage.db import Database
@@ -109,9 +110,23 @@ def test_inventory_sku_cost_and_profit_routes_are_writable(tmp_path):
         csrf_token="secret",
         inventory=InventoryService(database),
         orders=OrderRepository(database),
+        fulfillment=FulfillmentService(database),
         profit_sharing=ProfitSharingService(database),
     )
     common = {"csrf_token": "secret"}
+    assert router.post(
+        "/fulfillment",
+        {
+            **common,
+            "platform": "shopee",
+            "store": "shop",
+            "seller_sku": "SKU-1",
+            "effective_date": "2026-07-01",
+            "mode": "supplier_fulfilled",
+            "supply_status": "available",
+            "note": "货盘",
+        },
+    ).status == 303
     assert router.post(
         "/sku-costs",
         {
