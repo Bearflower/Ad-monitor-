@@ -136,8 +136,10 @@ def test_reconciliation_csv_import_and_report(tmp_path, monkeypatch, capsys):
     source = tmp_path / "reconcile.csv"
     source.write_text(
         "field,expected,actual,category\n"
-        "orders,10,10,attribution\n"
-        "campaign_status,active,active,display_lag\n",
+        "spend,400.00,400.00,money\n"
+        "gmv,1066.00,1066.00,money\n"
+        "orders,5,5,count\n"
+        "roas,2.67,2.6650,ratio\n",
         encoding="utf-8",
     )
     assert main(
@@ -154,6 +156,7 @@ def test_reconciliation_csv_import_and_report(tmp_path, monkeypatch, capsys):
             str(source),
         ]
     ) == 0
+    assert "accuracy=1.0000" in capsys.readouterr().out
     assert main(
         [
             "reconcile",
