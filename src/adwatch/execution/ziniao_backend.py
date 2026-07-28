@@ -86,6 +86,14 @@ class ZiniaoExecutionBackend:
             self.read_current(recommendation)
         intended = self._intended_state(recommendation)
         if self.mode == "shadow":
+            adapter, activation = self._resolved_state()
+            adapter.stage(
+                self.client,
+                self._store_id,
+                str(recommendation["campaign_id"]),
+                intended,
+                activation.selectors,
+            )
             return {**intended, "mode": "shadow", "submitted": False}
         adapter, activation = self._resolved_state()
         campaign_id = str(recommendation["campaign_id"])

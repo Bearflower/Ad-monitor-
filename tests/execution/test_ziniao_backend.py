@@ -83,10 +83,11 @@ def test_shadow_backend_reads_and_records_intent_without_submit(tmp_path):
         "mode": "shadow",
         "submitted": False,
     }
-    assert all(
-        not script.startswith(("input:", "click:"))
+    assert any(
+        script == "input:#budget-campaign-1:70.00"
         for _, script in client.scripts
     )
+    assert all(not script.startswith("click:") for _, script in client.scripts)
 
 
 def test_live_backend_refuses_when_global_switch_is_off():

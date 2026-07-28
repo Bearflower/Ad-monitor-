@@ -3,9 +3,9 @@ from __future__ import annotations
 import json
 import uuid
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from decimal import Decimal
-from typing import Protocol
+from typing import ClassVar, Protocol
 
 from adwatch.storage.db import Database
 
@@ -28,7 +28,7 @@ class ExecutionResult:
 
 
 class SafeExecutor:
-    BLOCKED_ACTIONS = {
+    BLOCKED_ACTIONS: ClassVar[set[str]] = {
         "delete",
         "delete_campaign",
         "modify_account",
@@ -56,7 +56,8 @@ class SafeExecutor:
                 raise ExecutionError("idempotency key already used")
             row = connection.execute(
                 """
-                SELECT a.status approval_status, a.expires_at, r.*
+                SELECT a.status approval_status, a.expires_at,
+                       a.requested_at approval_requested_at, r.*
                 FROM approvals a
                 JOIN recommendations r ON r.id=a.recommendation_id
                 WHERE a.id=?
@@ -69,11 +70,15 @@ class SafeExecutor:
         if row is None or row["approval_status"] != "approved":
             raise ExecutionError("approval is not approved")
         if datetime.fromisoformat(row["expires_at"]) <= datetime.now(
-            timezone.utc
+            UTC
         ):
             raise ExecutionError("approval has expired")
         if circuit and circuit["is_open"]:
             raise ExecutionError("write circuit is open")
+        if datetime.fromisoformat(row["updated_at"]) > datetime.fromisoformat(
+            row["approval_requested_at"]
+        ):
+            raise ExecutionError("recommendation changed after approval")
         if row["action"] in self.BLOCKED_ACTIONS:
             raise ExecutionError("action is permanently blocked")
         if (
@@ -86,12 +91,12 @@ class SafeExecutor:
         if current != expected_before:
             raise ExecutionError("current state drift detected")
 
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
         audit_id = str(uuid.uuid4())
         before_screenshot = self.backend.capture(f"{audit_id}-before")
         try:
             after = self.backend.execute(recommendation)
-        except Exception as error:
+        except Exception as error:  # noqa: BLE001 - backend boundary is arbitrary
             status = "failed"
             after = None
             rollback = getattr(self.backend, "rollback", None)
@@ -99,7 +104,7 @@ class SafeExecutor:
                 try:
                     after = rollback(recommendation, current)
                     status = "rolled_back"
-                except Exception:
+                except Exception:  # noqa: BLE001 - rollback must trip circuit
                     status = "rollback_failed"
             after_screenshot = self.backend.capture(f"{audit_id}-after")
             with self.database.transaction() as connection:
@@ -129,7 +134,7 @@ class SafeExecutor:
                         str(error),
                         idempotency_key,
                         now,
-                        datetime.now(timezone.utc).isoformat(),
+                        datetime.now(UTC).isoformat(),
                     ),
                 )
                 if status == "rollback_failed":
@@ -141,7 +146,7 @@ class SafeExecutor:
                             opened_at=?
                         WHERE id=1
                         """,
-                        (datetime.now(timezone.utc).isoformat(),),
+                        (datetime.now(UTC).isoformat(),),
                     )
             return ExecutionResult(audit_id=audit_id, status=status)
         after_screenshot = self.backend.capture(f"{audit_id}-after")
@@ -164,7 +169,7 @@ class SafeExecutor:
                     after_screenshot,
                     idempotency_key,
                     now,
-                    datetime.now(timezone.utc).isoformat(),
+                    datetime.now(UTC).isoformat(),
                 ),
             )
             connection.execute(

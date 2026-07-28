@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -78,13 +78,12 @@ def test_executor_rejects_expired_approval(tmp_path):
     database = Database(tmp_path / "test.sqlite3")
     database.migrate()
     approval_id = _approved(database)
-    expired = (datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat()
+    expired = (datetime.now(UTC) - timedelta(minutes=1)).isoformat()
     with database.transaction() as connection:
         connection.execute(
             "UPDATE approvals SET expires_at=? WHERE id=?",
             (expired, approval_id),
         )
-
     with pytest.raises(ExecutionError, match="expired"):
         SafeExecutor(database, FakeBackend()).execute(
             approval_id,
@@ -92,6 +91,26 @@ def test_executor_rejects_expired_approval(tmp_path):
             expected_before={"budget": "100"},
         )
 
+
+def test_executor_rejects_recommendation_changed_after_approval(tmp_path):
+    database = Database(tmp_path / "test.sqlite3")
+    database.migrate()
+    approval_id = _approved(database)
+    with database.transaction() as connection:
+        connection.execute(
+            """
+            UPDATE recommendations
+            SET change_ratio='-0.10', updated_at='2999-01-01T00:00:00+00:00'
+            WHERE id=(SELECT recommendation_id FROM approvals WHERE id=?)
+            """,
+            (approval_id,),
+        )
+    with pytest.raises(ExecutionError, match="changed after approval"):
+        SafeExecutor(database, FakeBackend()).execute(
+            approval_id,
+            idempotency_key="changed-recommendation",
+            expected_before={"budget": "100"},
+        )
 
 def test_executor_permanently_blocks_budget_increase_above_fifty_percent(
     tmp_path,
