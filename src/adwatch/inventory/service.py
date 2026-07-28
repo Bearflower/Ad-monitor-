@@ -138,6 +138,54 @@ class InventoryService:
             )
         return True
 
+    def record_order_cost(
+        self,
+        *,
+        platform: str,
+        store: str,
+        order_id: str,
+        seller_sku: str,
+        quantity: int,
+        unit_cost_cny: Decimal,
+        cost_effective_date: date,
+        status: str = "confirmed",
+    ) -> bool:
+        if quantity <= 0 or unit_cost_cny <= 0:
+            raise InventoryError("order cost inputs must be positive")
+        if status not in {"confirmed", "returned"}:
+            raise InventoryError("invalid order cost status")
+        with self.database.transaction() as connection:
+            if connection.execute(
+                """
+                SELECT 1 FROM order_cost_snapshots
+                WHERE platform=? AND store=? AND order_id=? AND seller_sku=?
+                """,
+                (platform, store, order_id, seller_sku),
+            ).fetchone():
+                return False
+            connection.execute(
+                """
+                INSERT INTO order_cost_snapshots(
+                    platform, store, order_id, seller_sku, quantity,
+                    unit_cost_cny, total_cost_cny, cost_effective_date,
+                    status, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?,
+                    strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+                """,
+                (
+                    platform,
+                    store,
+                    order_id,
+                    seller_sku,
+                    quantity,
+                    str(unit_cost_cny),
+                    str(unit_cost_cny * quantity),
+                    cost_effective_date.isoformat(),
+                    status,
+                ),
+            )
+        return True
+
     def return_order(
         self,
         *,

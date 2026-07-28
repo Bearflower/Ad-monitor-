@@ -5,6 +5,7 @@ from datetime import date
 from decimal import Decimal
 
 from adwatch.inventory.service import InventoryError, InventoryService
+from adwatch.orders.fulfillment import FulfillmentService
 from adwatch.storage.db import Database
 
 
@@ -15,6 +16,8 @@ class OperationsSyncResult:
     cancelled: int = 0
     pending_cost: int = 0
     pending_inventory: int = 0
+    pending_fulfillment: int = 0
+    supplier_costed: int = 0
     unchanged: int = 0
 
 
@@ -33,6 +36,7 @@ class OperationsSyncService:
     def __init__(self, database: Database) -> None:
         self.database = database
         self.inventory = InventoryService(database)
+        self.fulfillment = FulfillmentService(database)
 
     def sync(self) -> OperationsSyncResult:
         counts = {
@@ -41,6 +45,8 @@ class OperationsSyncService:
             "cancelled": 0,
             "pending_cost": 0,
             "pending_inventory": 0,
+            "pending_fulfillment": 0,
+            "supplier_costed": 0,
             "unchanged": 0,
         }
         for row in self._order_lines():
@@ -50,7 +56,44 @@ class OperationsSyncService:
             if order_status in self._CANCELLED:
                 counts["cancelled"] += 1
                 continue
+            ordered_on = date.fromisoformat(row["ordered_on"])
+            fulfillment = self.fulfillment.snapshot_order(
+                platform=row["platform"],
+                store=row["store"],
+                order_id=row["order_id"],
+                seller_sku=row["seller_sku"],
+                ordered_on=ordered_on,
+            )
+            if fulfillment is None:
+                counts["pending_fulfillment"] += 1
+                continue
             if refund_status in self._RETURNED:
+                if fulfillment.mode == "supplier_fulfilled":
+                    cost = self._cost_for(
+                        row["platform"],
+                        row["store"],
+                        row["seller_sku"],
+                        row["ordered_on"],
+                    )
+                    if cost is None:
+                        counts["pending_cost"] += 1
+                        continue
+                    if self.inventory.record_order_cost(
+                        platform=row["platform"],
+                        store=row["store"],
+                        order_id=row["order_id"],
+                        seller_sku=row["seller_sku"],
+                        quantity=int(row["quantity"]),
+                        unit_cost_cny=Decimal(cost["unit_cost_cny"]),
+                        cost_effective_date=date.fromisoformat(
+                            cost["effective_date"]
+                        ),
+                        status="returned",
+                    ):
+                        counts["returned"] += 1
+                    else:
+                        counts["unchanged"] += 1
+                    continue
                 if self.inventory.return_order(
                     platform=row["platform"],
                     store=row["store"],
@@ -77,6 +120,20 @@ class OperationsSyncService:
             )
             if cost is None:
                 counts["pending_cost"] += 1
+                continue
+            if fulfillment.mode == "supplier_fulfilled":
+                changed = self.inventory.record_order_cost(
+                    platform=row["platform"],
+                    store=row["store"],
+                    order_id=row["order_id"],
+                    seller_sku=row["seller_sku"],
+                    quantity=int(row["quantity"]),
+                    unit_cost_cny=Decimal(cost["unit_cost_cny"]),
+                    cost_effective_date=date.fromisoformat(
+                        cost["effective_date"]
+                    ),
+                )
+                counts["supplier_costed" if changed else "unchanged"] += 1
                 continue
             try:
                 changed = self.inventory.ship_order(

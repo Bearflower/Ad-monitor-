@@ -3,6 +3,7 @@ from decimal import Decimal
 
 from adwatch.inventory.models import PurchaseLine
 from adwatch.inventory.service import InventoryService
+from adwatch.orders.fulfillment import FulfillmentService
 from adwatch.orders.models import PlatformOrderLine
 from adwatch.orders.repository import OrderRepository
 from adwatch.orders.sync import OperationsSyncService
@@ -37,9 +38,21 @@ def _order(
     )
 
 
+def _set_policy(database, mode: str) -> None:
+    FulfillmentService(database).set_policy(
+        platform="shopee",
+        store="shop",
+        seller_sku="SKU-1",
+        effective_date=date(2026, 7, 1),
+        mode=mode,
+        supply_status="available",
+    )
+
+
 def test_sync_freezes_historical_cost_and_is_idempotent(tmp_path):
     database = Database(tmp_path / "sync.sqlite3")
     database.migrate()
+    _set_policy(database, "stocked")
     orders = OrderRepository(database)
     inventory = InventoryService(database)
     inventory.receive_purchase(
@@ -91,6 +104,7 @@ def test_sync_freezes_historical_cost_and_is_idempotent(tmp_path):
 def test_sync_reports_missing_cost_and_does_not_ship_cancelled_order(tmp_path):
     database = Database(tmp_path / "sync.sqlite3")
     database.migrate()
+    _set_policy(database, "stocked")
     orders = OrderRepository(database)
     orders.upsert_orders(
         (
@@ -117,6 +131,7 @@ def test_sync_reports_missing_cost_and_does_not_ship_cancelled_order(tmp_path):
 def test_sync_return_restocks_and_marks_cost_snapshot_returned(tmp_path):
     database = Database(tmp_path / "sync.sqlite3")
     database.migrate()
+    _set_policy(database, "stocked")
     orders = OrderRepository(database)
     inventory = InventoryService(database)
     inventory.receive_purchase(
@@ -155,6 +170,7 @@ def test_sync_return_restocks_and_marks_cost_snapshot_returned(tmp_path):
 def test_return_without_prior_shipment_does_not_create_stock(tmp_path):
     database = Database(tmp_path / "sync.sqlite3")
     database.migrate()
+    _set_policy(database, "stocked")
     OrderRepository(database).upsert_orders(
         (_order("RETURN-NOT-SHIPPED", refund_status="returned"),)
     )
@@ -164,3 +180,56 @@ def test_return_without_prior_shipment_does_not_create_stock(tmp_path):
     assert result.returned == 0
     assert result.unchanged == 1
     assert InventoryService(database).balance("SKU-1") == 0
+
+
+def test_supplier_fulfilled_order_costs_without_inventory(tmp_path):
+    database = Database(tmp_path / "sync.sqlite3")
+    database.migrate()
+    _set_policy(database, "supplier_fulfilled")
+    orders = OrderRepository(database)
+    orders.set_sku_cost(
+        platform="shopee",
+        store="shop",
+        seller_sku="SKU-1",
+        effective_date=date(2026, 7, 1),
+        unit_cost_cny=Decimal(5),
+    )
+    orders.upsert_orders((_order("SUPPLIER-1"),))
+
+    first = OperationsSyncService(database).sync()
+    second = OperationsSyncService(database).sync()
+
+    assert first.supplier_costed == 1
+    assert first.pending_inventory == 0
+    assert second.unchanged == 1
+    with database.connect() as connection:
+        snapshot = connection.execute(
+            """
+            SELECT total_cost_cny, status FROM order_cost_snapshots
+            WHERE order_id='SUPPLIER-1'
+            """
+        ).fetchone()
+        movements = connection.execute(
+            "SELECT COUNT(*) FROM inventory_movements"
+        ).fetchone()[0]
+    assert tuple(snapshot) == ("10", "confirmed")
+    assert movements == 0
+
+
+def test_missing_fulfillment_policy_is_explicitly_pending(tmp_path):
+    database = Database(tmp_path / "sync.sqlite3")
+    database.migrate()
+    orders = OrderRepository(database)
+    orders.set_sku_cost(
+        platform="shopee",
+        store="shop",
+        seller_sku="SKU-1",
+        effective_date=date(2026, 7, 1),
+        unit_cost_cny=Decimal(5),
+    )
+    orders.upsert_orders((_order("NO-POLICY"),))
+
+    result = OperationsSyncService(database).sync()
+
+    assert result.pending_fulfillment == 1
+    assert result.pending_inventory == 0
