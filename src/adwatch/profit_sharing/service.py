@@ -149,9 +149,27 @@ class ProfitSharingService:
             ).fetchone()[0]
             cogs = connection.execute(
                 """
-                SELECT COALESCE(SUM(CAST(total_cost_cny AS REAL)), 0)
-                FROM order_cost_snapshots AS snapshot
-                JOIN inventory_movements AS movement
+                WITH order_dates AS (
+                    SELECT platform, store, order_id, seller_sku,
+                           MIN(substr(ordered_at, 1, 10)) AS order_date
+                    FROM platform_order_lines
+                    GROUP BY platform, store, order_id, seller_sku
+                ),
+                cost_events AS (
+                    SELECT
+                        snapshot.total_cost_cny,
+                        COALESCE(
+                            movement.occurred_on,
+                            CASE WHEN fulfillment.mode='supplier_fulfilled'
+                                 THEN order_dates.order_date END
+                        ) AS occurred_on
+                    FROM order_cost_snapshots AS snapshot
+                    LEFT JOIN order_fulfillment_snapshots AS fulfillment
+                      ON fulfillment.platform=snapshot.platform
+                     AND fulfillment.store=snapshot.store
+                     AND fulfillment.order_id=snapshot.order_id
+                     AND fulfillment.seller_sku=snapshot.seller_sku
+                    LEFT JOIN inventory_movements AS movement
                   ON movement.source_type='order'
                  AND movement.movement_type='sale_out'
                  AND movement.source_id=(
@@ -159,8 +177,16 @@ class ProfitSharingService:
                     || snapshot.order_id
                  )
                  AND movement.seller_sku=snapshot.seller_sku
-                WHERE snapshot.status='confirmed'
-                  AND movement.occurred_on BETWEEN ? AND ?
+                    LEFT JOIN order_dates
+                      ON order_dates.platform=snapshot.platform
+                     AND order_dates.store=snapshot.store
+                     AND order_dates.order_id=snapshot.order_id
+                     AND order_dates.seller_sku=snapshot.seller_sku
+                    WHERE snapshot.status='confirmed'
+                )
+                SELECT COALESCE(SUM(CAST(total_cost_cny AS REAL)), 0)
+                FROM cost_events
+                WHERE occurred_on BETWEEN ? AND ?
                 """,
                 (start, end),
             ).fetchone()[0]

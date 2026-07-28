@@ -49,6 +49,7 @@ class AnalysisService:
                 (data_date.isoformat(),),
             )
             for row in rows:
+                inventory_required = bool(row["inventory_required"])
                 baseline = self.repository.baseline_for(row, data_date)
                 for anomaly in detect_anomalies(
                     current_spend=Decimal(row["spend"]),
@@ -67,9 +68,15 @@ class AnalysisService:
                         if baseline is None or baseline["roas"] is None
                         else Decimal(str(baseline["roas"]))
                     ),
-                    inventory_units=int(row["inventory_units"] or 0),
+                    inventory_units=(
+                        int(row["inventory_units"] or 0)
+                        if inventory_required
+                        else 0
+                    ),
                     expected_daily_units=Decimal(
                         row["expected_daily_units"] or "0"
+                        if inventory_required
+                        else "0"
                     ),
                     platform=row["platform"],
                     campaign_start=(
@@ -99,15 +106,17 @@ class AnalysisService:
                     alert_count += 1
                     pending_data_count += 1
                     continue
-                required = (
+                required = [
                     "product_cost",
                     "commission_rate",
-                    "inventory_units",
-                    "expected_daily_units",
                     "rate_to_cny",
                     "start_date",
                     "target_roas",
-                )
+                ]
+                if inventory_required:
+                    required.extend(
+                        ("inventory_units", "expected_daily_units")
+                    )
                 has_order_cost = row["order_product_cost_cny"] is not None
                 missing = [
                     field
@@ -150,12 +159,15 @@ class AnalysisService:
                 self._upsert_profit(connection, row, profit)
                 profit_count += 1
 
-                expected_units = Decimal(row["expected_daily_units"])
-                inventory_cover = (
-                    Decimal(row["inventory_units"]) / expected_units
-                    if expected_units > 0
-                    else Decimal(0)
-                )
+                if inventory_required:
+                    expected_units = Decimal(row["expected_daily_units"])
+                    inventory_cover = (
+                        Decimal(row["inventory_units"]) / expected_units
+                        if expected_units > 0
+                        else Decimal(0)
+                    )
+                else:
+                    inventory_cover = Decimal(999)
                 context = StrategyContext(
                     platform=row["platform"],
                     campaign_start=date.fromisoformat(row["start_date"]),
@@ -365,10 +377,16 @@ class AnalysisService:
             for row in rows
         )
         has_inventory = has_metrics and all(
-            row["inventory_units"] is not None
-            and row["expected_daily_units"] is not None
-            and Decimal(row["expected_daily_units"]) > 0
+            not row["inventory_required"]
+            or (
+                row["inventory_units"] is not None
+                and row["expected_daily_units"] is not None
+                and Decimal(row["expected_daily_units"]) > 0
+            )
             for row in rows
+        )
+        inventory_not_applicable = has_metrics and all(
+            not row["inventory_required"] for row in rows
         )
         return {
             "platform_metrics": "ready" if has_metrics else "pending_data",
@@ -377,7 +395,9 @@ class AnalysisService:
                 "ready" if has_verified_profit else "pending_data"
             ),
             "inventory_safe_strategy": (
-                "ready"
+                "not_applicable"
+                if has_verified_profit and inventory_not_applicable
+                else "ready"
                 if has_verified_profit and has_inventory
                 else "pending_data"
             ),

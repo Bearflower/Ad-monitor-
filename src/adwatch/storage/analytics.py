@@ -106,7 +106,8 @@ class AnalyticsRepository:
                             AS canonical_store,
                         line.order_date,
                         SUM(CAST(line.line_cost_cny AS NUMERIC))
-                            AS product_cost_cny
+                            AS product_cost_cny,
+                        1 AS inventory_required
                     FROM order_cost_lines AS line
                     LEFT JOIN store_aliases AS alias
                       ON alias.platform=line.platform
@@ -114,16 +115,35 @@ class AnalyticsRepository:
                     GROUP BY
                         line.platform, canonical_store, line.order_date
                 ),
+                order_dates AS (
+                    SELECT platform, store, order_id, seller_sku,
+                           MIN(substr(ordered_at, 1, 10)) AS order_date
+                    FROM platform_order_lines
+                    GROUP BY platform, store, order_id, seller_sku
+                ),
                 snapshot_order_costs AS (
                     SELECT
                         snapshot.platform,
                         COALESCE(alias.canonical_store, snapshot.store)
                             AS canonical_store,
-                        movement.occurred_on AS order_date,
+                        COALESCE(
+                            movement.occurred_on,
+                            order_dates.order_date
+                        ) AS order_date,
                         SUM(CAST(snapshot.total_cost_cny AS NUMERIC))
-                            AS product_cost_cny
+                            AS product_cost_cny,
+                        MAX(
+                            CASE WHEN COALESCE(
+                                fulfillment.mode, 'stocked'
+                            )='stocked' THEN 1 ELSE 0 END
+                        ) AS inventory_required
                     FROM order_cost_snapshots AS snapshot
-                    JOIN inventory_movements AS movement
+                    LEFT JOIN order_fulfillment_snapshots AS fulfillment
+                      ON fulfillment.platform=snapshot.platform
+                     AND fulfillment.store=snapshot.store
+                     AND fulfillment.order_id=snapshot.order_id
+                     AND fulfillment.seller_sku=snapshot.seller_sku
+                    LEFT JOIN inventory_movements AS movement
                       ON movement.source_type='order'
                      AND movement.movement_type='sale_out'
                      AND movement.source_id=(
@@ -131,13 +151,22 @@ class AnalyticsRepository:
                          || snapshot.order_id
                      )
                      AND movement.seller_sku=snapshot.seller_sku
+                    LEFT JOIN order_dates
+                      ON order_dates.platform=snapshot.platform
+                     AND order_dates.store=snapshot.store
+                     AND order_dates.order_id=snapshot.order_id
+                     AND order_dates.seller_sku=snapshot.seller_sku
                     LEFT JOIN store_aliases AS alias
                       ON alias.platform=snapshot.platform
                      AND alias.source_store=snapshot.store
                     WHERE snapshot.status='confirmed'
+                      AND (
+                          movement.occurred_on IS NOT NULL
+                          OR fulfillment.mode='supplier_fulfilled'
+                      )
                     GROUP BY
                         snapshot.platform, canonical_store,
-                        movement.occurred_on
+                        order_date
                 ),
                 daily_order_costs AS (
                     SELECT * FROM legacy_order_costs
@@ -179,6 +208,12 @@ class AnalyticsRepository:
                          AND metric_counts.metric_count > 1
                         THEN 1 ELSE 0
                     END AS order_cost_allocation_ambiguous
+                    ,
+                    CASE
+                        WHEN daily_order_costs.product_cost_cny IS NOT NULL
+                        THEN daily_order_costs.inventory_required
+                        ELSE 1
+                    END AS inventory_required
                 FROM daily_ad_metrics AS metric
                 LEFT JOIN product_costs AS cost
                     ON cost.sku_id = metric.sku_id

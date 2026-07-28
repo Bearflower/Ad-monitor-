@@ -1,5 +1,5 @@
 import json
-from datetime import date
+from datetime import UTC, date, datetime
 from decimal import Decimal
 
 from adwatch.cli import main
@@ -9,6 +9,10 @@ from adwatch.ledger.models import ExpenseDraft
 from adwatch.ledger.service import LedgerService
 from adwatch.optimization.models import OptimizationInput
 from adwatch.optimization.service import analyze_optimization
+from adwatch.orders.fulfillment import FulfillmentService
+from adwatch.orders.models import PlatformOrderLine
+from adwatch.orders.repository import OrderRepository
+from adwatch.orders.sync import OperationsSyncService
 from adwatch.reconciliation.service import ReconciliationService
 from adwatch.storage.db import Database
 
@@ -98,3 +102,63 @@ def test_unified_business_flow_keeps_inventory_profit_and_live_gate_separate(
     assert not reconcile.three_day_ready(
         platform="shopee", store="shop", through=date(2026, 7, 28)
     )
+
+
+def test_supplier_sku_order_creates_cost_without_inventory(tmp_path):
+    database = Database(tmp_path / "supplier.sqlite3")
+    database.migrate()
+    orders = OrderRepository(database)
+    orders.set_sku_cost(
+        platform="shopee",
+        store="shop",
+        seller_sku="SKU-1",
+        effective_date=date(2026, 7, 1),
+        unit_cost_cny=Decimal(5),
+    )
+    FulfillmentService(database).set_policy(
+        platform="shopee",
+        store="shop",
+        seller_sku="SKU-1",
+        effective_date=date(2026, 7, 1),
+        mode="supplier_fulfilled",
+        supply_status="available",
+    )
+    orders.upsert_orders(
+        (
+            PlatformOrderLine(
+                "shopee",
+                "shop",
+                "ORDER-1",
+                "item",
+                "model",
+                "SKU-1",
+                "1 bag",
+                "Product",
+                2,
+                Decimal(100),
+                "THB",
+                "completed",
+                "delivered",
+                "",
+                date(2026, 7, 28),
+                datetime(2026, 7, 28, tzinfo=UTC),
+            ),
+        )
+    )
+
+    result = OperationsSyncService(database).sync()
+
+    assert result.supplier_costed == 1
+    with database.connect() as connection:
+        assert (
+            connection.execute(
+                "SELECT total_cost_cny FROM order_cost_snapshots"
+            ).fetchone()[0]
+            == "10"
+        )
+        assert (
+            connection.execute(
+                "SELECT COUNT(*) FROM inventory_movements"
+            ).fetchone()[0]
+            == 0
+        )

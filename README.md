@@ -198,6 +198,27 @@ python -m adwatch dashboard --host 127.0.0.1 --port 8765 --date 2026-07-22
 Web 或《待补SKU成本.xlsx》中填写成本，`pending_inventory` 表示需要先
 补录采购/期初库存。每日任务会在利润和广告策略分析前自动执行同一同步。
 
+## SKU 履约方式
+
+履约方式只配置在 SKU，不配置在店铺。同一店铺可以同时销售货盘代发
+SKU 和自有备货 SKU，同一 SKU 也可以新增带生效日期的版本：
+
+```bash
+# 将当前已有成本的 SKU 批量标记为货盘代发
+.venv/bin/adwatch business mark-current-skus-supplier-fulfilled \
+  --platform shopee --store no4kud44da
+
+# 某个 SKU 从指定日期开始改为自有备货
+.venv/bin/adwatch business set-fulfillment \
+  --platform shopee --store no4kud44da --sku SKU-001 \
+  --effective-date 2026-08-15 --mode stocked \
+  --supply-status available
+```
+
+货盘代发订单按订单日期匹配 SKU 成本并进入利润，但不要求库存、不生成
+库存流水；自有备货订单继续要求采购或期初库存并生成销售出库。订单首次
+处理时会冻结当时的履约方式，后续新增版本不会改变历史订单。
+
 本地 Web 的“合伙人分润”可按日期区间从经营账生成草稿。口径为结算
 收入减销售出库成本、广告实际消耗、计入利润的已确认费用及刷单成本；
 采购付款和广告充值不会重复扣减。草稿采用该期间生效的 60%/40% 协议，

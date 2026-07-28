@@ -508,3 +508,66 @@ def test_analysis_reads_confirmed_inventory_cost_snapshot(tmp_path):
     row = AnalyticsRepository(database).load_analysis_rows(data_date)[0]
 
     assert Decimal(row["order_product_cost_cny"]) == Decimal(10)
+
+
+def test_supplier_fulfilled_cost_does_not_require_inventory_inputs(tmp_path):
+    data_date = date(2026, 7, 23)
+    database = Database(tmp_path / "test.sqlite3")
+    database.migrate()
+
+    class Collector:
+        source = "test"
+        platform = Platform.SHOPEE
+
+        def collect(self, day):
+            return [
+                DailyAdMetric(
+                    platform=self.platform,
+                    store="shop",
+                    account_id="account",
+                    campaign_id="campaign",
+                    sku_id="SKU-1",
+                    data_date=day,
+                    currency="CNY",
+                    spend=Decimal(20),
+                    attributed_gmv=Decimal(100),
+                    orders=1,
+                    source=self.source,
+                )
+            ]
+
+    PipelineRunner(database).run(Collector(), data_date)
+    AnalysisService(database).seed_mock_business_data(data_date)
+    with database.transaction() as connection:
+        connection.execute("DELETE FROM inventory_snapshots")
+        connection.execute(
+            """
+            INSERT INTO platform_order_lines VALUES(
+              'shopee','shop','ORDER-1','item','model','SKU-1',
+              '1 bag','Product',2,'100','CNY','completed','delivered','',
+              '2026-07-23','2026-07-23T00:00:00Z')
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO order_fulfillment_snapshots VALUES(
+              'shopee','shop','ORDER-1','SKU-1','supplier_fulfilled',
+              '2026-07-01','available','sku_policy',
+              '2026-07-23T00:00:00Z')
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO order_cost_snapshots VALUES(
+              'shopee','shop','ORDER-1','SKU-1',2,'5','10',
+              '2026-07-01','confirmed','2026-07-23T00:00:00Z')
+            """
+        )
+
+    row = AnalyticsRepository(database).load_analysis_rows(data_date)[0]
+    summary = AnalysisService(database).run(data_date)
+
+    assert row["inventory_required"] == 0
+    assert Decimal(row["order_product_cost_cny"]) == Decimal(10)
+    assert summary.profit_results == 1
+    assert summary.capabilities["inventory_safe_strategy"] == "not_applicable"

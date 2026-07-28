@@ -881,7 +881,10 @@ def main(argv: list[str] | None = None) -> int:
             f"daily_run={run_status} metrics={analysis_summary.metrics_processed} "
             f"recommendations={analysis_summary.recommendations} "
             f"orders_shipped={order_sync.shipped} "
+            f"orders_supplier_costed={order_sync.supplier_costed} "
             f"orders_pending_cost={order_sync.pending_cost} "
+            f"orders_pending_fulfillment="
+            f"{order_sync.pending_fulfillment} "
             f"delivery={delivery.status} report={delivery.path}"
         )
         return 2 if collection_errors else 0

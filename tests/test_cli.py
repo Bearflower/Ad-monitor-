@@ -242,7 +242,7 @@ def test_business_sync_orders_reports_pending_facts(
     assert main(["business", "sync-orders"]) == 2
 
     output = capsys.readouterr().out
-    assert "pending_cost=1" in output
+    assert "pending_fulfillment=1" in output
 
 
 def test_business_fulfillment_cli_sets_single_and_bulk_policies(

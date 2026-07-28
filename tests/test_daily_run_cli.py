@@ -7,6 +7,7 @@ from adwatch.config import Settings
 from adwatch.domain import DailyAdMetric
 from adwatch.inventory.models import PurchaseLine
 from adwatch.inventory.service import InventoryService
+from adwatch.orders.fulfillment import FulfillmentService
 from adwatch.orders.models import PlatformOrderLine
 from adwatch.orders.repository import OrderRepository
 from adwatch.storage.db import Database
@@ -27,6 +28,14 @@ def test_daily_run_syncs_existing_platform_orders_before_analysis(
     monkeypatch.setattr(adwatch.cli.Settings, "from_env", lambda: settings)
     database = Database(settings.database_path)
     database.migrate()
+    FulfillmentService(database).set_policy(
+        platform="shopee",
+        store="shop",
+        seller_sku="SKU-1",
+        effective_date=date(2026, 7, 1),
+        mode="stocked",
+        supply_status="available",
+    )
     InventoryService(database).receive_purchase(
         receipt_id="PO-1",
         supplier="factory",

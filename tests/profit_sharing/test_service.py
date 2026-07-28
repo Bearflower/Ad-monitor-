@@ -155,3 +155,56 @@ def test_period_from_ledger_excludes_purchase_and_ad_recharge(sharing):
             "SELECT net_profit_cny FROM profit_periods WHERE id=?", (period,)
         ).fetchone()
     assert row["net_profit_cny"] == "600.00"
+
+
+def test_supplier_fulfilled_order_cost_is_included_by_order_date(sharing):
+    service, database = sharing
+    service.create_agreement(
+        effective_from=date(2026, 1, 1),
+        shares={"洁云": Decimal("0.60"), "苏姐": Decimal("0.40")},
+        actor="yl",
+    )
+    with database.transaction() as connection:
+        connection.execute(
+            """
+            INSERT INTO settlement_records VALUES(
+              's1','shopee','shop','O1','2026-07-10',
+              '100','CNY','1','100','cli','2026-07-10T00:00:00Z')
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO platform_order_lines VALUES(
+              'shopee','shop','O1','item','model','SKU-1','1 bag','Product',
+              1,'100','CNY','completed','delivered','','2026-07-10',
+              '2026-07-10T00:00:00Z')
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO order_fulfillment_snapshots VALUES(
+              'shopee','shop','O1','SKU-1','supplier_fulfilled',
+              '2026-07-01','available','sku_policy',
+              '2026-07-10T00:00:00Z')
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO order_cost_snapshots VALUES(
+              'shopee','shop','O1','SKU-1',1,'30','30','2026-07-01',
+              'confirmed','2026-08-01T00:00:00Z')
+            """
+        )
+
+    period = service.create_period_from_ledger(
+        starts_on=date(2026, 7, 1),
+        ends_on=date(2026, 7, 31),
+        actor="yl",
+    )
+
+    with database.connect() as connection:
+        net_profit = connection.execute(
+            "SELECT net_profit_cny FROM profit_periods WHERE id=?",
+            (period,),
+        ).fetchone()[0]
+    assert net_profit == "70.00"
