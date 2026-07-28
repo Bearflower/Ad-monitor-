@@ -388,4 +388,83 @@ MIGRATIONS = [
         );
         """,
     ),
+    (
+        10,
+        """
+        CREATE TABLE expense_entries (
+            id TEXT PRIMARY KEY,
+            occurred_on TEXT NOT NULL,
+            category TEXT NOT NULL,
+            amount_original TEXT NOT NULL,
+            currency TEXT NOT NULL,
+            rate_to_cny TEXT NOT NULL,
+            amount_cny TEXT NOT NULL,
+            payer TEXT NOT NULL,
+            fund_nature TEXT NOT NULL,
+            affects_profit INTEGER NOT NULL CHECK(affects_profit IN (0, 1)),
+            affects_capital INTEGER NOT NULL CHECK(affects_capital IN (0, 1)),
+            status TEXT NOT NULL CHECK(status IN ('draft','confirmed','reversed')),
+            note TEXT NOT NULL DEFAULT '',
+            reversal_reason TEXT,
+            created_by TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+
+        CREATE TABLE capital_entries (
+            id TEXT PRIMARY KEY, partner TEXT NOT NULL, entry_type TEXT NOT NULL,
+            amount_original TEXT NOT NULL, currency TEXT NOT NULL,
+            rate_to_cny TEXT NOT NULL, amount_cny TEXT NOT NULL,
+            occurred_on TEXT NOT NULL, status TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+        CREATE TABLE withdrawal_entries (
+            id TEXT PRIMARY KEY, partner TEXT NOT NULL,
+            amount_original TEXT NOT NULL, currency TEXT NOT NULL,
+            rate_to_cny TEXT NOT NULL, amount_cny TEXT NOT NULL,
+            occurred_on TEXT NOT NULL, purpose TEXT NOT NULL,
+            status TEXT NOT NULL, created_at TEXT NOT NULL
+        );
+        CREATE TABLE ad_funding_entries (
+            id TEXT PRIMARY KEY, platform TEXT NOT NULL, store TEXT NOT NULL,
+            entry_type TEXT NOT NULL, amount_original TEXT NOT NULL,
+            currency TEXT NOT NULL, rate_to_cny TEXT NOT NULL,
+            amount_cny TEXT NOT NULL, occurred_on TEXT NOT NULL,
+            source TEXT NOT NULL, external_key TEXT UNIQUE,
+            status TEXT NOT NULL, created_at TEXT NOT NULL
+        );
+        CREATE TABLE ad_spend_entries (
+            id TEXT PRIMARY KEY, platform TEXT NOT NULL, store TEXT NOT NULL,
+            campaign_id TEXT NOT NULL, amount_original TEXT NOT NULL,
+            currency TEXT NOT NULL, rate_to_cny TEXT NOT NULL,
+            amount_cny TEXT NOT NULL, occurred_on TEXT NOT NULL,
+            source TEXT NOT NULL, external_key TEXT UNIQUE,
+            created_at TEXT NOT NULL
+        );
+        CREATE TABLE review_order_costs (
+            id TEXT PRIMARY KEY, platform TEXT NOT NULL, store TEXT NOT NULL,
+            order_id TEXT NOT NULL, seller_sku TEXT NOT NULL DEFAULT '',
+            goods_cost_cny TEXT NOT NULL, service_fee_cny TEXT NOT NULL,
+            occurred_on TEXT NOT NULL, excluded_from_real_metrics INTEGER
+                NOT NULL DEFAULT 1 CHECK(excluded_from_real_metrics IN (0, 1)),
+            status TEXT NOT NULL, created_at TEXT NOT NULL,
+            UNIQUE(platform, store, order_id, seller_sku)
+        );
+        CREATE TABLE cash_movements (
+            id TEXT PRIMARY KEY, occurred_on TEXT NOT NULL,
+            movement_type TEXT NOT NULL, amount_cny TEXT NOT NULL,
+            source_type TEXT NOT NULL, source_id TEXT NOT NULL,
+            reversal_of TEXT REFERENCES cash_movements(id),
+            created_at TEXT NOT NULL,
+            UNIQUE(source_type, source_id, movement_type)
+        );
+        CREATE TABLE audit_events (
+            id TEXT PRIMARY KEY, object_type TEXT NOT NULL,
+            object_id TEXT NOT NULL, action TEXT NOT NULL,
+            before_json TEXT, after_json TEXT, actor TEXT NOT NULL,
+            reason TEXT, created_at TEXT NOT NULL
+        );
+        CREATE INDEX audit_events_object_idx
+        ON audit_events(object_type, object_id, created_at);
+        """,
+    ),
 ]
