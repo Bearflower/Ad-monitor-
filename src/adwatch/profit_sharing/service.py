@@ -134,3 +134,108 @@ class ProfitSharingService:
                     ),
                 )
         return period_id
+
+    def confirm_period(self, period_id: str, *, actor: str) -> None:
+        with self.database.transaction() as connection:
+            row = connection.execute(
+                "SELECT status FROM profit_periods WHERE id=?", (period_id,)
+            ).fetchone()
+            if row is None or row["status"] != "draft":
+                raise ProfitSharingError("only draft periods can be confirmed")
+            connection.execute(
+                "UPDATE profit_periods SET status='confirmed' WHERE id=?",
+                (period_id,),
+            )
+            connection.execute(
+                """
+                INSERT INTO audit_events(
+                    id, object_type, object_id, action,
+                    after_json, actor, created_at
+                ) VALUES (?, 'profit_period', ?, 'confirm', ?, ?, ?)
+                """,
+                (
+                    str(uuid.uuid4()),
+                    period_id,
+                    '{"status":"confirmed"}',
+                    actor,
+                    datetime.now(UTC).isoformat(),
+                ),
+            )
+
+    def record_payment(
+        self,
+        *,
+        period_id: str,
+        partner: str,
+        amount_cny: Decimal,
+        paid_on: date,
+        status: str,
+        note: str,
+        actor: str,
+    ) -> str:
+        amount = _money(amount_cny)
+        if amount <= 0 or status not in {"planned", "paid", "reversed"}:
+            raise ProfitSharingError("invalid payment amount or status")
+        payment_id = str(uuid.uuid4())
+        now = datetime.now(UTC).isoformat()
+        with self.database.transaction() as connection:
+            allocation = connection.execute(
+                """
+                SELECT a.amount_cny, p.status
+                FROM profit_allocations a
+                JOIN profit_periods p ON p.id=a.period_id
+                WHERE a.period_id=? AND a.partner=?
+                """,
+                (period_id, partner),
+            ).fetchone()
+            if allocation is None or allocation["status"] != "confirmed":
+                raise ProfitSharingError("period must be confirmed")
+            paid = connection.execute(
+                """
+                SELECT COALESCE(SUM(CAST(amount_cny AS REAL)), 0)
+                FROM profit_payments
+                WHERE period_id=? AND partner=? AND status='paid'
+                """,
+                (period_id, partner),
+            ).fetchone()[0]
+            if status == "paid" and Decimal(str(paid)) + amount > Decimal(
+                allocation["amount_cny"]
+            ):
+                raise ProfitSharingError("payment exceeds allocation")
+            connection.execute(
+                """
+                INSERT INTO profit_payments(
+                    id, period_id, partner, amount_cny,
+                    paid_on, status, note, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    payment_id,
+                    period_id,
+                    partner,
+                    str(amount),
+                    paid_on.isoformat(),
+                    status,
+                    note,
+                    now,
+                ),
+            )
+            connection.execute(
+                """
+                INSERT INTO audit_events(
+                    id, object_type, object_id, action,
+                    after_json, actor, created_at
+                ) VALUES (?, 'profit_payment', ?, 'create', ?, ?, ?)
+                """,
+                (
+                    str(uuid.uuid4()),
+                    payment_id,
+                    json.dumps(
+                        {"status": status, "amount_cny": str(amount)},
+                        sort_keys=True,
+                    ),
+                    actor,
+                    now,
+                ),
+            )
+        return payment_id

@@ -48,6 +48,50 @@ def render_operations_forms(csrf_token: str) -> str:
         <button type="submit">保存草稿</button>
       </form>
     </section>
+    <section class="panel"><h2>合伙人出资与提款</h2>
+      <form method="post" action="/capital">
+        <input type="hidden" name="csrf_token" value="{token}">
+        <input type="date" name="occurred_on" required>
+        <input name="partner" placeholder="合伙人" required>
+        <select name="entry_type"><option value="paid_in">实缴</option>
+          <option value="advance">代垫</option></select>
+        <input name="amount" placeholder="人民币金额" required>
+        <button>登记出资</button>
+      </form>
+      <form method="post" action="/withdrawals">
+        <input type="hidden" name="csrf_token" value="{token}">
+        <input type="date" name="occurred_on" required>
+        <input name="partner" placeholder="提款人" required>
+        <input name="amount" placeholder="人民币金额" required>
+        <input name="purpose" placeholder="用途" required>
+        <button>登记提款</button>
+      </form>
+    </section>
+    <section class="panel"><h2>广告充值与刷单成本</h2>
+      <form method="post" action="/ad-funding">
+        <input type="hidden" name="csrf_token" value="{token}">
+        <input type="date" name="occurred_on" required>
+        <input name="platform" placeholder="平台" required>
+        <input name="store" placeholder="店铺" required>
+        <select name="entry_type"><option value="recharge">充值</option>
+          <option value="gift">赠送</option>
+          <option value="refund">退款</option></select>
+        <input name="amount" placeholder="人民币金额" required>
+        <input name="source" value="manual" required>
+        <button>登记广告资金</button>
+      </form>
+      <form method="post" action="/review-costs">
+        <input type="hidden" name="csrf_token" value="{token}">
+        <input type="date" name="occurred_on" required>
+        <input name="platform" placeholder="平台" required>
+        <input name="store" placeholder="店铺" required>
+        <input name="order_id" placeholder="刷单订单号" required>
+        <input name="seller_sku" placeholder="Seller SKU">
+        <input name="goods_cost" placeholder="货款" required>
+        <input name="service_fee" placeholder="服务费" required>
+        <button>登记并排除真实指标</button>
+      </form>
+    </section>
     """
 
 

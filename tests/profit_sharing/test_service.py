@@ -60,3 +60,35 @@ def test_agreement_shares_must_total_one(sharing):
             shares={"洁云": Decimal("0.60"), "苏姐": Decimal("0.50")},
             actor="yl",
         )
+
+
+def test_confirm_period_and_record_partial_payment(sharing):
+    service, database = sharing
+    service.create_agreement(
+        effective_from=date(2026, 1, 1),
+        shares={"洁云": Decimal("0.60"), "苏姐": Decimal("0.40")},
+        actor="yl",
+    )
+    period = service.create_period(
+        starts_on=date(2026, 7, 1),
+        ends_on=date(2026, 7, 31),
+        net_profit_cny=Decimal(1000),
+        actor="yl",
+    )
+    service.confirm_period(period, actor="yl")
+    payment = service.record_payment(
+        period_id=period,
+        partner="洁云",
+        amount_cny=Decimal(300),
+        paid_on=date(2026, 8, 1),
+        status="paid",
+        note="首笔",
+        actor="yl",
+    )
+    assert payment
+    with database.connect() as connection:
+        row = connection.execute(
+            "SELECT amount_cny, status FROM profit_payments WHERE id=?",
+            (payment,),
+        ).fetchone()
+    assert dict(row) == {"amount_cny": "300.00", "status": "paid"}

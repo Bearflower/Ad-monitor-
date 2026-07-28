@@ -49,3 +49,50 @@ def test_invalid_decimal_returns_400_without_writing(tmp_path):
         },
     )
     assert response.status == 400
+
+
+def test_finance_write_routes_cover_capital_withdrawal_funding_and_review(tmp_path):
+    database = Database(tmp_path / "web.sqlite3")
+    database.migrate()
+    router = DashboardRouter(LedgerService(database), csrf_token="secret")
+    cases = (
+        (
+            "/capital",
+            {"partner": "洁云", "entry_type": "paid_in", "amount": "1000"},
+        ),
+        (
+            "/withdrawals",
+            {"partner": "苏姐", "amount": "100", "purpose": "备用金"},
+        ),
+        (
+            "/ad-funding",
+            {
+                "platform": "shopee",
+                "store": "shop",
+                "entry_type": "recharge",
+                "amount": "500",
+                "source": "manual",
+            },
+        ),
+        (
+            "/review-costs",
+            {
+                "platform": "shopee",
+                "store": "shop",
+                "order_id": "REVIEW-1",
+                "seller_sku": "SKU-1",
+                "goods_cost": "20",
+                "service_fee": "5",
+            },
+        ),
+    )
+    for path, fields in cases:
+        response = router.post(
+            path,
+            {
+                "csrf_token": "secret",
+                "occurred_on": "2026-07-28",
+                **fields,
+            },
+        )
+        assert response.status == 303

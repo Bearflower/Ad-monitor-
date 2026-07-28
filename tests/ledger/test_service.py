@@ -73,3 +73,50 @@ def test_expense_rejects_invalid_amount_and_state_transitions(service):
             ),
             actor="yl",
         )
+
+
+def test_capital_withdrawal_ad_funding_and_review_cost_are_writable(service):
+    ledger, database = service
+    capital = ledger.create_capital(
+        partner="洁云",
+        entry_type="paid_in",
+        amount=Decimal(1000),
+        occurred_on=date(2026, 7, 28),
+        actor="yl",
+    )
+    withdrawal = ledger.create_withdrawal(
+        partner="苏姐",
+        amount=Decimal(100),
+        occurred_on=date(2026, 7, 28),
+        purpose="备用金",
+        actor="yl",
+    )
+    funding = ledger.create_ad_funding(
+        platform="shopee",
+        store="shop",
+        entry_type="recharge",
+        amount=Decimal(500),
+        occurred_on=date(2026, 7, 28),
+        source="manual",
+        actor="yl",
+    )
+    review = ledger.create_review_order_cost(
+        platform="shopee",
+        store="shop",
+        order_id="REVIEW-1",
+        seller_sku="SKU-1",
+        goods_cost=Decimal(20),
+        service_fee=Decimal(5),
+        occurred_on=date(2026, 7, 28),
+        actor="yl",
+    )
+
+    assert all((capital, withdrawal, funding, review))
+    with database.connect() as connection:
+        assert connection.execute("SELECT COUNT(*) FROM capital_entries").fetchone()[0] == 1
+        assert connection.execute("SELECT COUNT(*) FROM withdrawal_entries").fetchone()[0] == 1
+        assert connection.execute("SELECT COUNT(*) FROM ad_funding_entries").fetchone()[0] == 1
+        row = connection.execute(
+            "SELECT excluded_from_real_metrics FROM review_order_costs"
+        ).fetchone()
+    assert row["excluded_from_real_metrics"] == 1

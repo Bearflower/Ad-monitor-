@@ -21,11 +21,53 @@ class DashboardRouter:
     def post(self, path: str, form: dict[str, str]) -> RouteResponse:
         if form.get("csrf_token") != self.csrf_token:
             return RouteResponse(403, message="invalid CSRF token")
-        if path != "/expenses":
-            return RouteResponse(404, message="unknown route")
         try:
+            occurred_on = date.fromisoformat(form["occurred_on"])
+            if path == "/capital":
+                self.ledger.create_capital(
+                    partner=form["partner"],
+                    entry_type=form["entry_type"],
+                    amount=Decimal(form["amount"]),
+                    occurred_on=occurred_on,
+                    actor="local-web",
+                )
+                return RouteResponse(303, location="/operations")
+            if path == "/withdrawals":
+                self.ledger.create_withdrawal(
+                    partner=form["partner"],
+                    amount=Decimal(form["amount"]),
+                    occurred_on=occurred_on,
+                    purpose=form["purpose"],
+                    actor="local-web",
+                )
+                return RouteResponse(303, location="/operations")
+            if path == "/ad-funding":
+                self.ledger.create_ad_funding(
+                    platform=form["platform"],
+                    store=form["store"],
+                    entry_type=form["entry_type"],
+                    amount=Decimal(form["amount"]),
+                    occurred_on=occurred_on,
+                    source=form["source"],
+                    actor="local-web",
+                )
+                return RouteResponse(303, location="/ad-funds")
+            if path == "/review-costs":
+                self.ledger.create_review_order_cost(
+                    platform=form["platform"],
+                    store=form["store"],
+                    order_id=form["order_id"],
+                    seller_sku=form.get("seller_sku", ""),
+                    goods_cost=Decimal(form["goods_cost"]),
+                    service_fee=Decimal(form["service_fee"]),
+                    occurred_on=occurred_on,
+                    actor="local-web",
+                )
+                return RouteResponse(303, location="/operations")
+            if path != "/expenses":
+                return RouteResponse(404, message="unknown route")
             draft = ExpenseDraft(
-                occurred_on=date.fromisoformat(form["occurred_on"]),
+                occurred_on=occurred_on,
                 category=form["category"],
                 amount_original=Decimal(form["amount"]),
                 currency=form["currency"],

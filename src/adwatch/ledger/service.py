@@ -159,6 +159,265 @@ class LedgerService:
             )
 
     @staticmethod
+    def _positive(amount: Decimal) -> Decimal:
+        if amount <= 0:
+            raise LedgerError("amount must be positive")
+        return _money(amount)
+
+    def create_capital(
+        self,
+        *,
+        partner: str,
+        entry_type: str,
+        amount: Decimal,
+        occurred_on,
+        actor: str,
+    ) -> str:
+        value = self._positive(amount)
+        entry_id = str(uuid.uuid4())
+        now = datetime.now(UTC).isoformat()
+        with self.database.transaction() as connection:
+            connection.execute(
+                """
+                INSERT INTO capital_entries(
+                    id, partner, entry_type, amount_original, currency,
+                    rate_to_cny, amount_cny, occurred_on, status, created_at
+                ) VALUES (?, ?, ?, ?, 'CNY', '1', ?, ?, 'confirmed', ?)
+                """,
+                (
+                    entry_id,
+                    partner,
+                    entry_type,
+                    str(value),
+                    str(value),
+                    occurred_on.isoformat(),
+                    now,
+                ),
+            )
+            self._cash(
+                connection, occurred_on, "capital_in", value, "capital", entry_id, now
+            )
+            self._audit_generic(
+                connection, "capital", entry_id, actor, {"status": "confirmed"}, now
+            )
+        return entry_id
+
+    def create_withdrawal(
+        self,
+        *,
+        partner: str,
+        amount: Decimal,
+        occurred_on,
+        purpose: str,
+        actor: str,
+    ) -> str:
+        value = self._positive(amount)
+        entry_id = str(uuid.uuid4())
+        now = datetime.now(UTC).isoformat()
+        with self.database.transaction() as connection:
+            connection.execute(
+                """
+                INSERT INTO withdrawal_entries(
+                    id, partner, amount_original, currency, rate_to_cny,
+                    amount_cny, occurred_on, purpose, status, created_at
+                ) VALUES (?, ?, ?, 'CNY', '1', ?, ?, ?, 'confirmed', ?)
+                """,
+                (
+                    entry_id,
+                    partner,
+                    str(value),
+                    str(value),
+                    occurred_on.isoformat(),
+                    purpose,
+                    now,
+                ),
+            )
+            self._cash(
+                connection,
+                occurred_on,
+                "partner_withdrawal",
+                -value,
+                "withdrawal",
+                entry_id,
+                now,
+            )
+            self._audit_generic(
+                connection,
+                "withdrawal",
+                entry_id,
+                actor,
+                {"status": "confirmed"},
+                now,
+            )
+        return entry_id
+
+    def create_ad_funding(
+        self,
+        *,
+        platform: str,
+        store: str,
+        entry_type: str,
+        amount: Decimal,
+        occurred_on,
+        source: str,
+        actor: str,
+    ) -> str:
+        value = self._positive(amount)
+        entry_id = str(uuid.uuid4())
+        now = datetime.now(UTC).isoformat()
+        with self.database.transaction() as connection:
+            connection.execute(
+                """
+                INSERT INTO ad_funding_entries(
+                    id, platform, store, entry_type, amount_original,
+                    currency, rate_to_cny, amount_cny, occurred_on,
+                    source, status, created_at
+                ) VALUES (?, ?, ?, ?, ?, 'CNY', '1', ?, ?, ?, 'confirmed', ?)
+                """,
+                (
+                    entry_id,
+                    platform,
+                    store,
+                    entry_type,
+                    str(value),
+                    str(value),
+                    occurred_on.isoformat(),
+                    source,
+                    now,
+                ),
+            )
+            delta = value if entry_type in {"refund", "gift"} else -value
+            self._cash(
+                connection,
+                occurred_on,
+                "ad_funding",
+                delta,
+                "ad_funding",
+                entry_id,
+                now,
+            )
+            self._audit_generic(
+                connection,
+                "ad_funding",
+                entry_id,
+                actor,
+                {"status": "confirmed"},
+                now,
+            )
+        return entry_id
+
+    def create_review_order_cost(
+        self,
+        *,
+        platform: str,
+        store: str,
+        order_id: str,
+        seller_sku: str,
+        goods_cost: Decimal,
+        service_fee: Decimal,
+        occurred_on,
+        actor: str,
+    ) -> str:
+        if goods_cost < 0 or service_fee < 0 or goods_cost + service_fee <= 0:
+            raise LedgerError("review order cost must be positive")
+        entry_id = str(uuid.uuid4())
+        now = datetime.now(UTC).isoformat()
+        total = _money(goods_cost + service_fee)
+        with self.database.transaction() as connection:
+            connection.execute(
+                """
+                INSERT INTO review_order_costs(
+                    id, platform, store, order_id, seller_sku,
+                    goods_cost_cny, service_fee_cny, occurred_on,
+                    status, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'confirmed', ?)
+                """,
+                (
+                    entry_id,
+                    platform,
+                    store,
+                    order_id,
+                    seller_sku,
+                    str(_money(goods_cost)),
+                    str(_money(service_fee)),
+                    occurred_on.isoformat(),
+                    now,
+                ),
+            )
+            self._cash(
+                connection,
+                occurred_on,
+                "review_order_payment",
+                -total,
+                "review_order",
+                entry_id,
+                now,
+            )
+            self._audit_generic(
+                connection,
+                "review_order",
+                entry_id,
+                actor,
+                {"status": "confirmed", "excluded": True},
+                now,
+            )
+        return entry_id
+
+    @staticmethod
+    def _cash(
+        connection,
+        occurred_on,
+        movement_type: str,
+        amount: Decimal,
+        source_type: str,
+        source_id: str,
+        now: str,
+    ) -> None:
+        connection.execute(
+            """
+            INSERT INTO cash_movements(
+                id, occurred_on, movement_type, amount_cny,
+                source_type, source_id, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                str(uuid.uuid4()),
+                occurred_on.isoformat(),
+                movement_type,
+                str(_money(amount)),
+                source_type,
+                source_id,
+                now,
+            ),
+        )
+
+    @staticmethod
+    def _audit_generic(
+        connection,
+        object_type: str,
+        object_id: str,
+        actor: str,
+        after: dict,
+        now: str,
+    ) -> None:
+        connection.execute(
+            """
+            INSERT INTO audit_events(
+                id, object_type, object_id, action,
+                after_json, actor, created_at
+            ) VALUES (?, ?, ?, 'create', ?, ?, ?)
+            """,
+            (
+                str(uuid.uuid4()),
+                object_type,
+                object_id,
+                json.dumps(after, sort_keys=True),
+                actor,
+                now,
+            ),
+        )
+
+    @staticmethod
     def _audit(
         connection,
         object_id: str,
