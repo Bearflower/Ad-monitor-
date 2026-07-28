@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 import csv
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
-from typing import Iterable
 
 from openpyxl import load_workbook
 
@@ -119,7 +119,7 @@ def import_order_costs(database: Database, source: Path) -> OrderImportSummary:
     dates = [item.order_date for item in unique.values()]
     total = sum(
         (item.line_cost_cny for item in unique.values()),
-        Decimal("0"),
+        Decimal(0),
     )
     return OrderImportSummary(
         read=len(raw),
@@ -287,7 +287,7 @@ def _parse_date(value: object) -> date:
     if isinstance(value, date):
         return value
     if isinstance(value, bool):
-        raise ValueError("boolean date")
+        raise TypeError("boolean date")
     if isinstance(value, (int, float, Decimal)):
         decimal = Decimal(str(value))
         if decimal != decimal.to_integral_value():
@@ -296,7 +296,7 @@ def _parse_date(value: object) -> date:
     else:
         text = _text(value)
     if len(text) == 8 and text.isdigit():
-        return datetime.strptime(text, "%Y%m%d").date()
+        return date(int(text[:4]), int(text[4:6]), int(text[6:8]))
     return date.fromisoformat(text)
 
 

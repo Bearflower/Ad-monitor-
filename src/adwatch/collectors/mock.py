@@ -40,7 +40,7 @@ class MockCollector:
                     currency=currency,
                     spend=spend,
                     attributed_gmv=gmv,
-                    orders=max(0, int(gmv / Decimal("35"))),
+                    orders=max(0, int(gmv / Decimal(35))),
                     source=self.source,
                 )
             )

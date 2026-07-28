@@ -188,7 +188,7 @@ class ZiniaoCollector:
                 current_page = int(next_page["page"])
                 total_pages = int(next_page["total"])
         else:
-            raise ValueError("Shopee Ads page returned an invalid result")
+            raise TypeError("Shopee Ads page returned an invalid result")
         return parse_shopee_product_rows(
             rows,
             store=self.settings.ziniao_shopee_store_name,

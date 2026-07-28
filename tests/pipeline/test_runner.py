@@ -43,8 +43,8 @@ def test_new_collection_replaces_platform_day_snapshot(tmp_path):
                     sku_id=sku_id,
                     data_date=data_date,
                     currency="THB",
-                    spend=Decimal("10"),
-                    attributed_gmv=Decimal("30"),
+                    spend=Decimal(10),
+                    attributed_gmv=Decimal(30),
                     orders=1,
                     source="ziniao-cli",
                 )

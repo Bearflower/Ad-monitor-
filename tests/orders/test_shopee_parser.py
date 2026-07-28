@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import UTC, datetime
 
 from adwatch.orders.shopee_parser import parse_product_page
 
@@ -15,7 +15,7 @@ def test_parse_product_page_extracts_seller_skus_and_inventory():
     result = parse_product_page(
         text,
         store="虾皮泰国",
-        observed_at=datetime(2026, 7, 28, 9, 0),
+        observed_at=datetime(2026, 7, 28, 9, 0, tzinfo=UTC),
     )
 
     assert [(item.seller_sku, item.inventory_units) for item in result.skus] == [

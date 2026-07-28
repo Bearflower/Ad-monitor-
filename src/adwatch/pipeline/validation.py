@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import datetime
 
 from adwatch.domain import DailyAdMetric, ValidatedMetric, ValidationIssue
 
@@ -51,7 +51,7 @@ def validate_metric(metric: DailyAdMetric) -> ValidatedMetric:
                 )
             )
 
-    if metric.data_date > date.today():
+    if metric.data_date > datetime.now().astimezone().date():
         issues.append(
             ValidationIssue(
                 code="future_data_date",

@@ -1,7 +1,7 @@
 import hashlib
 import hmac
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 
@@ -25,7 +25,7 @@ def test_callback_challenge_requires_valid_signature(tmp_path):
     database = Database(tmp_path / "test.sqlite3")
     database.migrate()
     body = json.dumps({"challenge": "abc"}).encode()
-    now = int(datetime.now(timezone.utc).timestamp())
+    now = int(datetime.now(UTC).timestamp())
 
     response = process_callback(
         database,
@@ -42,7 +42,7 @@ def test_callback_rejects_expired_timestamp(tmp_path):
     database = Database(tmp_path / "test.sqlite3")
     database.migrate()
     body = json.dumps({"challenge": "abc"}).encode()
-    now = int(datetime.now(timezone.utc).timestamp())
+    now = int(datetime.now(UTC).timestamp())
 
     with pytest.raises(CallbackError, match="expired"):
         process_callback(
@@ -59,7 +59,7 @@ def test_callback_rejects_replayed_event(tmp_path):
     database.migrate()
     payload = {"event_id": "event-1", "challenge": "abc"}
     body = json.dumps(payload).encode()
-    now = int(datetime.now(timezone.utc).timestamp())
+    now = int(datetime.now(UTC).timestamp())
     headers = _headers(body, "secret", now)
 
     process_callback(

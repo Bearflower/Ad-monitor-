@@ -1,8 +1,7 @@
-from datetime import datetime
+from datetime import UTC, datetime
 from decimal import Decimal
 
-from openpyxl import load_workbook
-from openpyxl import Workbook
+from openpyxl import Workbook, load_workbook
 
 from adwatch.analytics.sku_cost_workbook import (
     export_pending_sku_costs,
@@ -21,7 +20,7 @@ def test_pending_workbook_prefills_facts_and_imports_only_cost(tmp_path):
             PlatformSku(
                 "shopee", "虾皮泰国", "57861884313", "311033956020",
                 "Foot Soak Bag-one bag", "1 bag", "泡脚包", 31,
-                datetime(2026, 7, 28, 9),
+                datetime(2026, 7, 28, 9, tzinfo=UTC),
             ),
         )
     )
@@ -41,7 +40,7 @@ def test_pending_workbook_prefills_facts_and_imports_only_cost(tmp_path):
 
     with database.connect() as connection:
         row = connection.execute("SELECT * FROM sku_cost_history").fetchone()
-    assert Decimal(row["unit_cost_cny"]) == Decimal("5")
+    assert Decimal(row["unit_cost_cny"]) == Decimal(5)
     assert row["effective_date"] == "2026-07-08"
 
 

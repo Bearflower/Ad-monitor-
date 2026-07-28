@@ -4,7 +4,7 @@ import json
 import sqlite3
 import uuid
 from dataclasses import asdict
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from decimal import Decimal
 from enum import Enum
 
@@ -13,7 +13,7 @@ from adwatch.storage.db import Database
 
 
 def _utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def _json_default(value: object) -> str:

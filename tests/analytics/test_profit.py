@@ -6,14 +6,14 @@ from adwatch.analytics.profit import ProfitInput, calculate_profit
 def test_profit_uses_refunds_commission_costs_and_operating_deductions():
     result = calculate_profit(
         ProfitInput(
-            gmv=Decimal("1000"),
-            refunds=Decimal("100"),
+            gmv=Decimal(1000),
+            refunds=Decimal(100),
             commission_rate=Decimal("0.08"),
-            product_cost=Decimal("300"),
-            ad_spend=Decimal("120"),
-            seller_shipping=Decimal("40"),
-            coupons=Decimal("20"),
-            allocated_fixed_cost=Decimal("30"),
+            product_cost=Decimal(300),
+            ad_spend=Decimal(120),
+            seller_shipping=Decimal(40),
+            coupons=Decimal(20),
+            allocated_fixed_cost=Decimal(30),
             exchange_rate_to_cny=Decimal("1.50"),
         )
     )
@@ -31,16 +31,16 @@ def test_zero_spend_has_no_break_even_roas():
 def test_order_product_cost_cny_is_not_converted_again():
     result = calculate_profit(
         ProfitInput(
-            gmv=Decimal("1000"),
-            refunds=Decimal("0"),
+            gmv=Decimal(1000),
+            refunds=Decimal(0),
             commission_rate=Decimal("0.10"),
-            product_cost=Decimal("0"),
-            ad_spend=Decimal("100"),
-            seller_shipping=Decimal("0"),
-            coupons=Decimal("0"),
-            allocated_fixed_cost=Decimal("0"),
+            product_cost=Decimal(0),
+            ad_spend=Decimal(100),
+            seller_shipping=Decimal(0),
+            coupons=Decimal(0),
+            allocated_fixed_cost=Decimal(0),
             exchange_rate_to_cny=Decimal("0.20"),
-            product_cost_cny=Decimal("75"),
+            product_cost_cny=Decimal(75),
         )
     )
 

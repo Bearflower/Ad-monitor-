@@ -5,7 +5,6 @@ from datetime import datetime
 
 from adwatch.orders.models import ParseResult, PlatformSku
 
-
 _ITEM = re.compile(
     r"(?P<name>.+?)\s+Parent SKU:.*?Item ID:\s*(?P<item>\d+)"
     r"(?P<body>.*?)(?=(?:\S.+?\s+Parent SKU:.*?Item ID:)|\Z)",

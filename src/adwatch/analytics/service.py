@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 from decimal import Decimal
 
 from adwatch.analytics.anomalies import detect_anomalies
@@ -154,7 +154,7 @@ class AnalysisService:
                 inventory_cover = (
                     Decimal(row["inventory_units"]) / expected_units
                     if expected_units > 0
-                    else Decimal("0")
+                    else Decimal(0)
                 )
                 context = StrategyContext(
                     platform=row["platform"],
@@ -243,7 +243,7 @@ class AnalysisService:
                     int(circuit.is_open),
                     json.dumps(circuit.reasons),
                     (
-                        datetime.now(timezone.utc).isoformat()
+                        datetime.now(UTC).isoformat()
                         if circuit.is_open
                         else None
                     ),

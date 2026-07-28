@@ -20,7 +20,7 @@ class ProfitInput:
 
     @classmethod
     def zero(cls) -> "ProfitInput":
-        zero = Decimal("0")
+        zero = Decimal(0)
         return cls(
             gmv=zero,
             refunds=zero,
@@ -30,7 +30,7 @@ class ProfitInput:
             seller_shipping=zero,
             coupons=zero,
             allocated_fixed_cost=zero,
-            exchange_rate_to_cny=Decimal("1"),
+            exchange_rate_to_cny=Decimal(1),
         )
 
 
@@ -68,7 +68,7 @@ def calculate_profit(item: ProfitInput) -> ProfitResult:
     net_profit_cny = gross_profit_cny - ad_spend_cny - other_costs_cny
 
     break_even_roas = None
-    contribution_rate = Decimal("1") - item.commission_rate
+    contribution_rate = Decimal(1) - item.commission_rate
     if ad_spend_cny != 0 and contribution_rate > 0:
         break_even_gmv_cny = (
             resolved_product_cost_cny + other_costs_cny + ad_spend_cny

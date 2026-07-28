@@ -198,8 +198,8 @@ def test_two_days_global_low_roas_open_circuit(tmp_path):
                     sku_id="__ALL__",
                     data_date=data_date,
                     currency="THB",
-                    spend=Decimal("100"),
-                    attributed_gmv=Decimal("100"),
+                    spend=Decimal(100),
+                    attributed_gmv=Decimal(100),
                     orders=1,
                     source=self.source,
                 )
@@ -245,8 +245,8 @@ def test_three_real_low_days_feed_pause_strategy(tmp_path):
                     sku_id="__ALL__",
                     data_date=data_date,
                     currency="THB",
-                    spend=Decimal("100"),
-                    attributed_gmv=Decimal("80"),
+                    spend=Decimal(100),
+                    attributed_gmv=Decimal(80),
                     orders=1,
                     source=self.source,
                 )
@@ -338,8 +338,8 @@ def test_single_metric_uses_mapped_order_cost_cny(tmp_path):
                     sku_id="__ALL__",
                     data_date=day,
                     currency="THB",
-                    spend=Decimal("100"),
-                    attributed_gmv=Decimal("1000"),
+                    spend=Decimal(100),
+                    attributed_gmv=Decimal(1000),
                     orders=1,
                     source=self.source,
                 )
@@ -369,7 +369,7 @@ def test_single_metric_uses_mapped_order_cost_cny(tmp_path):
         )
 
     row = AnalyticsRepository(database).load_analysis_rows(data_date)[0]
-    assert Decimal(row["order_product_cost_cny"]) == Decimal("75")
+    assert Decimal(row["order_product_cost_cny"]) == Decimal(75)
     assert row["order_cost_allocation_ambiguous"] == 0
 
     summary = service.run(data_date)
@@ -404,8 +404,8 @@ def test_multiple_metrics_flag_ambiguous_order_cost_allocation(tmp_path):
                     sku_id=f"SKU-{index}",
                     data_date=day,
                     currency="THB",
-                    spend=Decimal("100"),
-                    attributed_gmv=Decimal("300"),
+                    spend=Decimal(100),
+                    attributed_gmv=Decimal(300),
                     orders=1,
                     source=self.source,
                 )

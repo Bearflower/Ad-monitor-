@@ -22,8 +22,8 @@ def summarize_window(
 ) -> WindowSummary:
     start = end - timedelta(days=days - 1)
     selected = [point for point in points if start <= point.data_date <= end]
-    spend = sum((point.spend for point in selected), Decimal("0"))
-    gmv = sum((point.gmv for point in selected), Decimal("0"))
+    spend = sum((point.spend for point in selected), Decimal(0))
+    gmv = sum((point.gmv for point in selected), Decimal(0))
     roas = None
     if spend != 0:
         roas = (gmv / spend).quantize(Decimal("0.0001"))

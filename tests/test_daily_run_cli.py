@@ -38,8 +38,8 @@ def test_daily_ziniao_run_uses_real_collectors_and_marks_real_report(
                     sku_id="SKU-1",
                     data_date=data_date,
                     currency="THB",
-                    spend=Decimal("10"),
-                    attributed_gmv=Decimal("30"),
+                    spend=Decimal(10),
+                    attributed_gmv=Decimal(30),
                     orders=1,
                     source=self.source,
                 )
@@ -85,8 +85,8 @@ def test_daily_run_keeps_shopee_data_when_tiktok_collection_fails(
                     sku_id="__ALL__",
                     data_date=data_date,
                     currency="THB",
-                    spend=Decimal("10"),
-                    attributed_gmv=Decimal("30"),
+                    spend=Decimal(10),
+                    attributed_gmv=Decimal(30),
                     orders=1,
                     source=self.source,
                 )

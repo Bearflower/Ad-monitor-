@@ -31,7 +31,15 @@ def test_import_xlsx_normalizes_dates_and_is_idempotent(tmp_path):
     sheet.append([20260708, "Shopee", "no4kud44da", "001", "1 bag", 1, 5])
     sheet.append([date(2026, 7, 9), "shopee", "no4kud44da", "002", "3 bags", 2, 11])
     sheet.append(
-        [datetime(2026, 7, 10, 8), "shopee", "no4kud44da", "003", "5 bags", 1, 17]
+        [
+            datetime(2026, 7, 10, 8),  # noqa: DTZ001 - Excel rejects tzinfo
+            "shopee",
+            "no4kud44da",
+            "003",
+            "5 bags",
+            1,
+            17,
+        ]
     )
     workbook.save(source)
 

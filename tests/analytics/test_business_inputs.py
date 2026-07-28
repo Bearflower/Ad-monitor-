@@ -31,7 +31,7 @@ class OneMetricCollector:
                 data_date=data_date,
                 currency="THB",
                 spend=Decimal("105.49"),
-                attributed_gmv=Decimal("310"),
+                attributed_gmv=Decimal(310),
                 orders=5,
                 source="ziniao-cli",
             )

@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import UTC, datetime
 
 from adwatch.orders.models import PlatformSku
 from adwatch.orders.repository import OrderRepository
@@ -11,11 +11,11 @@ def test_sku_upsert_is_idempotent_and_keeps_latest_inventory(tmp_path):
     repository = OrderRepository(database)
     first = PlatformSku(
         "shopee", "虾皮泰国", "item", "model", "seller-sku", "1 bag",
-        "Foot soak", 31, datetime(2026, 7, 28, 9),
+        "Foot soak", 31, datetime(2026, 7, 28, 9, tzinfo=UTC),
     )
     latest = PlatformSku(
         "shopee", "虾皮泰国", "item", "model", "seller-sku", "1 bag",
-        "Foot soak", 29, datetime(2026, 7, 29, 9),
+        "Foot soak", 29, datetime(2026, 7, 29, 9, tzinfo=UTC),
     )
 
     repository.upsert_skus((first,))

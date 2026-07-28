@@ -5,7 +5,7 @@ import hmac
 import secrets
 import uuid
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from adwatch.storage.db import Database
 
@@ -33,7 +33,7 @@ class ApprovalService:
         self.database = database
 
     def create(self, recommendation_id: int) -> ApprovalRequest:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         expires = now + timedelta(hours=24)
         approval_id = str(uuid.uuid4())
         token = secrets.token_urlsafe(32)
@@ -84,7 +84,7 @@ class ApprovalService:
         actor: str,
         reason: str = "",
     ) -> ApprovalDecision:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         with self.database.transaction() as connection:
             row = connection.execute(
                 "SELECT * FROM approvals WHERE id=?", (approval_id,)

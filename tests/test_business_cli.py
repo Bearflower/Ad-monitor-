@@ -29,8 +29,8 @@ def _insert_metric(database):
                 campaign_id="campaign-1",
                 sku_id="__ALL__",
                 currency="THB",
-                spend=Decimal("100"),
-                attributed_gmv=Decimal("300"),
+                spend=Decimal(100),
+                attributed_gmv=Decimal(300),
                 orders=5,
                 source="test",
                 )
@@ -62,7 +62,7 @@ def test_business_export_template_cli(tmp_path, monkeypatch, capsys):
     assert result == 0
     assert "Exported 1 business input rows" in capsys.readouterr().out
     with output.open(encoding="utf-8-sig", newline="") as handle:
-        assert list(csv.DictReader(handle))[0]["campaign_id"] == "campaign-1"
+        assert next(iter(csv.DictReader(handle)))["campaign_id"] == "campaign-1"
 
 
 def test_business_import_cli_reports_validation_error(tmp_path, monkeypatch, capsys):

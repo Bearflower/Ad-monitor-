@@ -9,7 +9,7 @@ from adwatch.integrations.refunds import StaticRefundSource
 
 def test_refunds_support_t_plus_three_correction():
     source = StaticRefundSource(
-        {("shopee", "campaign-1", date(2026, 7, 20)): Decimal("12")}
+        {("shopee", "campaign-1", date(2026, 7, 20)): Decimal(12)}
     )
 
     assert source.fetch(
@@ -17,12 +17,12 @@ def test_refunds_support_t_plus_three_correction():
         campaign_id="campaign-1",
         data_date=date(2026, 7, 20),
         as_of=date(2026, 7, 23),
-    ) == Decimal("12")
+    ) == Decimal(12)
 
 
 def test_inventory_and_exchange_sources_have_deterministic_contracts():
     inventory = StaticInventorySource(
-        {("SKU-1", date(2026, 7, 23)): (100, Decimal("5"))}
+        {("SKU-1", date(2026, 7, 23)): (100, Decimal(5))}
     )
     exchange = StaticExchangeRateSource(
         {("THB", date(2026, 7, 23)): Decimal("0.21")}
@@ -30,7 +30,7 @@ def test_inventory_and_exchange_sources_have_deterministic_contracts():
 
     assert inventory.fetch("SKU-1", date(2026, 7, 23)) == (
         100,
-        Decimal("5"),
+        Decimal(5),
     )
     assert exchange.fetch("THB", date(2026, 7, 23)) == Decimal("0.21")
 
