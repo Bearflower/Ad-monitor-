@@ -536,4 +536,22 @@ MIGRATIONS = [
         );
         """,
     ),
+    (
+        13,
+        """
+        CREATE TABLE settlement_records (
+            external_key TEXT PRIMARY KEY, platform TEXT NOT NULL,
+            store TEXT NOT NULL, order_id TEXT NOT NULL,
+            settled_on TEXT NOT NULL, amount_original TEXT NOT NULL,
+            currency TEXT NOT NULL, rate_to_cny TEXT NOT NULL,
+            amount_cny TEXT NOT NULL, source TEXT NOT NULL,
+            imported_at TEXT NOT NULL
+        );
+        CREATE TABLE integration_capability_runs (
+            id TEXT PRIMARY KEY, capability TEXT NOT NULL,
+            status TEXT NOT NULL, reason TEXT NOT NULL,
+            record_count INTEGER NOT NULL, checked_at TEXT NOT NULL
+        );
+        """,
+    ),
 ]
