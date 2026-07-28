@@ -1,3 +1,4 @@
+from dataclasses import replace
 from datetime import date
 from decimal import Decimal
 
@@ -36,10 +37,10 @@ def test_three_low_days_after_learning_recommends_pause():
 
 def test_negative_profit_or_stock_risk_blocks_budget_increase():
     context = StrategyContext.example(
-        roas=Decimal("4"),
-        target_roas=Decimal("2"),
-        net_profit=Decimal("-1"),
-        inventory_cover_days=Decimal("3"),
+        roas=Decimal(4),
+        target_roas=Decimal(2),
+        net_profit=Decimal(-1),
+        inventory_cover_days=Decimal(3),
     )
     assert all(item.action != "increase_budget" for item in recommend(context))
 
@@ -49,7 +50,7 @@ def test_moderately_low_roas_recommends_lower_target_after_learning():
         StrategyContext.example(
             platform="shopee",
             roas=Decimal("1.5"),
-            target_roas=Decimal("2"),
+            target_roas=Decimal(2),
         )
     )
 
@@ -63,7 +64,7 @@ def test_roas_above_one_fifty_percent_recommends_higher_target():
         StrategyContext.example(
             platform="shopee",
             roas=Decimal("3.2"),
-            target_roas=Decimal("2"),
+            target_roas=Decimal(2),
         )
     )
 
@@ -77,17 +78,17 @@ def test_product_retest_is_capped_at_twenty_percent():
         retest_candidate=True,
         verified_profit=True,
         inventory_verified=True,
-        available_test_budget=Decimal("300"),
-        current_budget=Decimal("1000"),
-        roas=Decimal("1"),
-        target_roas=Decimal("2"),
+        available_test_budget=Decimal(300),
+        current_budget=Decimal(1000),
+        roas=Decimal(1),
+        target_roas=Decimal(2),
     )
 
     retest = next(
         item for item in recommend(context) if item.action == "allocate_retest"
     )
 
-    assert retest.amount == Decimal("200")
+    assert retest.amount == Decimal(200)
     assert retest.amount <= context.current_budget * Decimal("0.20")
 
 
@@ -99,3 +100,26 @@ def test_product_retest_requires_verified_profit_and_inventory():
     )
 
     assert all(item.action != "allocate_retest" for item in recommend(context))
+
+
+def test_increase_budget_requires_business_safety_gates():
+    base = StrategyContext.example(
+        roas=Decimal(3),
+        target_roas=Decimal(2),
+        net_profit=Decimal(100),
+        inventory_cover_days=Decimal(30),
+        profit_roas=Decimal(2),
+        refund_rate=Decimal("0.05"),
+        data_confidence="inventory_safe",
+        inventory_verified=True,
+    )
+    for unsafe in (
+        {"profit_roas": Decimal(-1)},
+        {"refund_rate": Decimal("0.31")},
+        {"data_confidence": "platform_only"},
+        {"inventory_verified": False},
+    ):
+        context = replace(base, **unsafe)
+        assert not any(
+            item.action == "increase_budget" for item in recommend(context)
+        )

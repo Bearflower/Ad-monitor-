@@ -554,4 +554,25 @@ MIGRATIONS = [
         );
         """,
     ),
+    (
+        14,
+        """
+        CREATE TABLE strategy_rule_versions (
+            id TEXT PRIMARY KEY, version INTEGER NOT NULL UNIQUE,
+            effective_from TEXT NOT NULL UNIQUE, effective_to TEXT,
+            parameters_json TEXT NOT NULL, created_by TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+        ALTER TABLE recommendations ADD COLUMN rule_version_id TEXT;
+        ALTER TABLE recommendations ADD COLUMN window_days INTEGER;
+        ALTER TABLE recommendations
+            ADD COLUMN confidence_level TEXT NOT NULL DEFAULT 'platform_only';
+        ALTER TABLE recommendations
+            ADD COLUMN evidence_json TEXT NOT NULL DEFAULT '{}';
+        ALTER TABLE recommendations
+            ADD COLUMN expected_before_json TEXT NOT NULL DEFAULT '{}';
+        ALTER TABLE recommendations
+            ADD COLUMN expected_impact_json TEXT NOT NULL DEFAULT '{}';
+        """,
+    ),
 ]

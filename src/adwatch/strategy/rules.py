@@ -19,6 +19,11 @@ class StrategyContext:
     verified_profit: bool = False
     inventory_verified: bool = False
     available_test_budget: Decimal = Decimal(0)
+    net_sales_roas: Decimal | None = None
+    profit_roas: Decimal | None = None
+    refund_rate: Decimal = Decimal(0)
+    data_confidence: str = "platform_only"
+    rule_version_id: str = ""
 
     @classmethod
     def example(cls, **overrides: object) -> "StrategyContext":
@@ -27,12 +32,12 @@ class StrategyContext:
             campaign_start=date(2026, 7, 1),
             data_date=date(2026, 7, 22),
             consecutive_low_days=0,
-            roas=Decimal("2"),
-            target_roas=Decimal("2"),
-            net_profit=Decimal("100"),
-            inventory_cover_days=Decimal("30"),
-            current_budget=Decimal("100"),
-            baseline_budget=Decimal("100"),
+            roas=Decimal(2),
+            target_roas=Decimal(2),
+            net_profit=Decimal(100),
+            inventory_cover_days=Decimal(30),
+            current_budget=Decimal(100),
+            baseline_budget=Decimal(100),
         )
         return replace(base, **overrides)
 
@@ -82,7 +87,7 @@ def recommend(context: StrategyContext) -> tuple[Recommendation, ...]:
     target_ratio = (
         context.roas / context.target_roas
         if context.target_roas > 0
-        else Decimal("0")
+        else Decimal(0)
     )
     if target_ratio < Decimal("0.50") and context.consecutive_low_days >= 3:
         return retest_recommendations + (
@@ -121,14 +126,19 @@ def recommend(context: StrategyContext) -> tuple[Recommendation, ...]:
             ),
         )
     if (
-        target_ratio >= Decimal("1")
+        target_ratio >= Decimal(1)
         and context.net_profit > 0
+        and context.profit_roas is not None
+        and context.profit_roas > 0
+        and context.refund_rate <= Decimal("0.30")
+        and context.data_confidence == "inventory_safe"
+        and context.inventory_verified
         and context.inventory_cover_days >= 14
         and context.current_budget > 0
     ):
         maximum_ratio = (
             context.baseline_budget * 2 / context.current_budget
-        ) - Decimal("1")
+        ) - Decimal(1)
         change_ratio = min(Decimal("0.30"), maximum_ratio)
         if change_ratio > 0:
             return retest_recommendations + (
