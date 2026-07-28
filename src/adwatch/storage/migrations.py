@@ -467,4 +467,41 @@ MIGRATIONS = [
         ON audit_events(object_type, object_id, created_at);
         """,
     ),
+    (
+        11,
+        """
+        CREATE TABLE purchase_receipts (
+            id TEXT PRIMARY KEY, supplier TEXT NOT NULL,
+            received_on TEXT NOT NULL, status TEXT NOT NULL,
+            created_by TEXT NOT NULL, created_at TEXT NOT NULL
+        );
+        CREATE TABLE purchase_lines (
+            receipt_id TEXT NOT NULL REFERENCES purchase_receipts(id),
+            seller_sku TEXT NOT NULL, quantity INTEGER NOT NULL CHECK(quantity > 0),
+            unit_cost_cny TEXT NOT NULL, line_cost_cny TEXT NOT NULL,
+            PRIMARY KEY(receipt_id, seller_sku)
+        );
+        CREATE TABLE inventory_movements (
+            id TEXT PRIMARY KEY, seller_sku TEXT NOT NULL,
+            movement_type TEXT NOT NULL, quantity_delta INTEGER NOT NULL,
+            occurred_on TEXT NOT NULL, source_type TEXT NOT NULL,
+            source_id TEXT NOT NULL, note TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL,
+            UNIQUE(source_type, source_id, seller_sku, movement_type)
+        );
+        CREATE TABLE inventory_balances (
+            seller_sku TEXT PRIMARY KEY, units INTEGER NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        CREATE TABLE order_cost_snapshots (
+            platform TEXT NOT NULL, store TEXT NOT NULL,
+            order_id TEXT NOT NULL, seller_sku TEXT NOT NULL,
+            quantity INTEGER NOT NULL CHECK(quantity > 0),
+            unit_cost_cny TEXT NOT NULL, total_cost_cny TEXT NOT NULL,
+            cost_effective_date TEXT, status TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            PRIMARY KEY(platform, store, order_id, seller_sku)
+        );
+        """,
+    ),
 ]
