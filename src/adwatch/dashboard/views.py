@@ -49,3 +49,33 @@ def render_operations_forms(csrf_token: str) -> str:
       </form>
     </section>
     """
+
+
+def render_optimization_center(
+    *,
+    platform_roas: str,
+    net_sales_roas: str,
+    profit_roas: str,
+    confidence: str,
+    evidence: tuple[str, ...],
+    action: str,
+    before: str,
+    after: str,
+    execution_status: str,
+) -> str:
+    items = "".join(f"<li>{html.escape(item)}</li>" for item in evidence)
+    return f"""
+    <section class="panel">
+      <h2>广告调优</h2>
+      <dl>
+        <div><dt>平台 ROAS</dt><dd>{html.escape(platform_roas)}</dd></div>
+        <div><dt>净销售 ROAS</dt><dd>{html.escape(net_sales_roas)}</dd></div>
+        <div><dt>利润 ROAS</dt><dd>{html.escape(profit_roas)}</dd></div>
+        <div><dt>数据可信度</dt><dd>{html.escape(confidence)}</dd></div>
+      </dl>
+      <h3>建议与证据</h3>
+      <p>{html.escape(action)}：{html.escape(before)} → {html.escape(after)}</p>
+      <ul>{items}</ul>
+      <p>执行状态：{html.escape(execution_status)}</p>
+    </section>
+    """

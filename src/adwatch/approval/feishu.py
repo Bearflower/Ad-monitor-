@@ -15,6 +15,10 @@ def build_approval_card(
     campaign_id: str,
     action: str,
     reason: str,
+    evidence: tuple[str, ...] = (),
+    expected_before: dict[str, str] | None = None,
+    expected_after: dict[str, str] | None = None,
+    web_url: str = "",
 ) -> dict[str, object]:
     def button(label: str, decision: str, button_type: str) -> dict:
         return {
@@ -28,6 +32,17 @@ def build_approval_card(
             },
         }
 
+    before = expected_before or {}
+    after = expected_after or {}
+    changes = ", ".join(
+        f"{key}: {before.get(key, 'N/A')} → {after.get(key, 'N/A')}"
+        for key in sorted(set(before) | set(after))
+    )
+    evidence_text = "\n".join(f"- {item}" for item in evidence)
+    details = (
+        f"\n**变更**：{changes}" if changes else ""
+    ) + (f"\n**证据**：\n{evidence_text}" if evidence_text else "")
+    details += f"\n**详情**：{web_url}" if web_url else ""
     return {
         "msg_type": "interactive",
         "card": {
@@ -47,6 +62,7 @@ def build_approval_card(
                         f"**动作**：{action}\n"
                         f"**原因**：{reason}\n"
                         f"**过期时间**：{request.expires_at}"
+                        f"{details}"
                     ),
                 },
                 {

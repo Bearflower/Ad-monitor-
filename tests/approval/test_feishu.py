@@ -33,6 +33,10 @@ def test_approval_card_contains_signed_approve_and_reject_actions(tmp_path):
         campaign_id="Shop GMV Max",
         action="reduce_budget",
         reason="low ROAS",
+        evidence=("利润 ROAS 0.80", "库存可售 30"),
+        expected_before={"budget": "100"},
+        expected_after={"budget": "80"},
+        web_url="http://127.0.0.1:8765/optimization",
     )
 
     assert payload["msg_type"] == "interactive"
@@ -46,6 +50,10 @@ def test_approval_card_contains_signed_approve_and_reject_actions(tmp_path):
         for item in actions
     )
     assert request.decision_token not in payload["card"]["header"]["title"]["content"]
+    content = payload["card"]["elements"][0]["content"]
+    assert "利润 ROAS 0.80" in content
+    assert "100 → 80" in content
+    assert "127.0.0.1:8765/optimization" in content
 
 
 def test_feishu_action_decides_approval_using_operator_identity(tmp_path):
