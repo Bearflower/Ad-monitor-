@@ -55,6 +55,10 @@ class _DomAction:
         intended: dict[str, str],
         selectors: dict[str, str],
     ) -> None:
+        if selectors.get("open"):
+            client.page_click(
+                store_id, self._selector(selectors, "open", campaign_id)
+            )
         selector = self._selector(selectors, "stage", campaign_id)
         if self.stage_kind == "click":
             client.page_click(store_id, selector)
