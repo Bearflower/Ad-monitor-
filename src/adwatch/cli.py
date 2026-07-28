@@ -1,8 +1,9 @@
 import argparse
 import calendar
+import csv
 import json
 import shutil
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from html import escape
 from pathlib import Path
 
@@ -17,11 +18,11 @@ from adwatch.analytics.order_costs import (
     map_store,
     order_cost_summary,
 )
+from adwatch.analytics.service import AnalysisService
 from adwatch.analytics.sku_cost_workbook import (
     export_pending_sku_costs,
     import_sku_costs,
 )
-from adwatch.analytics.service import AnalysisService
 from adwatch.approval.server import serve_callback
 from adwatch.collectors.mock import MockCollector
 from adwatch.collectors.ziniao import ZiniaoCollector, ZiniaoNotConfigured
@@ -49,6 +50,7 @@ from adwatch.operations.launch_checklist import (
 )
 from adwatch.operations.readiness import readiness_status
 from adwatch.pipeline.runner import PipelineRunner
+from adwatch.reconciliation.service import ReconciliationService
 from adwatch.reporting.delivery import deliver_report
 from adwatch.reporting.markdown import (
     render_daily_markdown,
@@ -61,12 +63,13 @@ from adwatch.storage.db import Database
 
 
 def build_parser() -> argparse.ArgumentParser:
+    local_today = datetime.now().astimezone().date()
     parser = argparse.ArgumentParser(prog="adwatch")
     subcommands = parser.add_subparsers(dest="command")
     subcommands.add_parser("init")
     collect = subcommands.add_parser("collect")
     collect.add_argument("--mode", choices=("mock", "ziniao"), default="mock")
-    collect.add_argument("--date", type=date.fromisoformat, default=date.today())
+    collect.add_argument("--date", type=date.fromisoformat, default=local_today)
     subcommands.add_parser("doctor")
     subcommands.add_parser("readiness")
     launch_checklist = subcommands.add_parser("launch-checklist")
@@ -122,9 +125,9 @@ def build_parser() -> argparse.ArgumentParser:
     execute.add_argument("--idempotency-key", required=True)
     execute.add_argument("--expected-before", required=True)
     seed = subcommands.add_parser("seed-business-data")
-    seed.add_argument("--date", type=date.fromisoformat, default=date.today())
+    seed.add_argument("--date", type=date.fromisoformat, default=local_today)
     analyze = subcommands.add_parser("analyze")
-    analyze.add_argument("--date", type=date.fromisoformat, default=date.today())
+    analyze.add_argument("--date", type=date.fromisoformat, default=local_today)
     business = subcommands.add_parser("business")
     business_commands = business.add_subparsers(dest="business_command")
     export_template = business_commands.add_parser("export-template")
@@ -165,15 +168,31 @@ def build_parser() -> argparse.ArgumentParser:
     daily.add_argument(
         "--date",
         type=date.fromisoformat,
-        default=date.today() - timedelta(days=1),
+        default=local_today - timedelta(days=1),
     )
     schedule = subcommands.add_parser("schedule")
     schedule.add_argument("--print-launchd", action="store_true")
     dashboard = subcommands.add_parser("dashboard")
     dashboard.add_argument("--host", default="127.0.0.1")
     dashboard.add_argument("--port", type=int, default=8765)
-    dashboard.add_argument("--date", type=date.fromisoformat, default=date.today())
+    dashboard.add_argument("--date", type=date.fromisoformat, default=local_today)
     dashboard.add_argument("--allow-remote", action="store_true")
+    reconcile = subcommands.add_parser("reconcile")
+    reconcile_commands = reconcile.add_subparsers(dest="reconcile_command")
+    reconcile_import = reconcile_commands.add_parser("import")
+    reconcile_import.add_argument("--platform", required=True)
+    reconcile_import.add_argument("--store", required=True)
+    reconcile_import.add_argument("--date", type=date.fromisoformat, required=True)
+    reconcile_import.add_argument("--file", type=Path, required=True)
+    reconcile_report = reconcile_commands.add_parser("report")
+    reconcile_report.add_argument("--platform", required=True)
+    reconcile_report.add_argument("--store", required=True)
+    reconcile_report.add_argument(
+        "--from", dest="start", type=date.fromisoformat, required=True
+    )
+    reconcile_report.add_argument(
+        "--to", dest="end", type=date.fromisoformat, required=True
+    )
     return parser
 
 
@@ -308,6 +327,21 @@ def main(argv: list[str] | None = None) -> int:
                     """
                 )
             }
+            reconciliation_rows = connection.execute(
+                """
+                SELECT data_date, MIN(CAST(accuracy AS REAL)) min_accuracy
+                FROM reconciliation_days
+                GROUP BY data_date
+                ORDER BY data_date DESC LIMIT 3
+                """
+            ).fetchall()
+            has_three_day_reconciliation = (
+                len(reconciliation_rows) == 3
+                and all(
+                    float(row["min_accuracy"]) >= 0.99
+                    for row in reconciliation_rows
+                )
+            )
         readiness = LaunchReadiness(
             ziniao_bridge=_ziniao_bridge_ready(),
             tiktok_campaign_validation=has_tiktok_campaign,
@@ -329,9 +363,12 @@ def main(argv: list[str] | None = None) -> int:
             selector_activation=selector_count == 10,
             platform_api_oauth=settings.platform_api_oauth_ready,
             three_day_reconciliation=(
-                settings_rows.get("three_day_reconciled") == "true"
+                has_three_day_reconciliation
             ),
-            live_allowlist=bool(settings.live_allowlist),
+            live_allowlist=(
+                bool(settings.live_allowlist)
+                and has_three_day_reconciliation
+            ),
         )
         items = build_launch_checklist(readiness)
         if args.format == "json":
@@ -351,6 +388,54 @@ def main(argv: list[str] | None = None) -> int:
         else:
             print(render_launch_checklist(items))
         return 0
+    if args.command == "reconcile":
+        database.migrate()
+        service = ReconciliationService(database)
+        if args.reconcile_command == "import":
+            try:
+                with args.file.open(encoding="utf-8-sig", newline="") as stream:
+                    rows = tuple(csv.DictReader(stream))
+                required = {"field", "expected", "actual", "category"}
+                if not rows or any(
+                    not required <= set(row) or not row["field"] for row in rows
+                ):
+                    raise ValueError(
+                        "CSV requires field,expected,actual,category"
+                    )
+                expected = {row["field"]: row["expected"] for row in rows}
+                actual = {row["field"]: row["actual"] for row in rows}
+                categories = {row["field"]: row["category"] for row in rows}
+                result = service.record_day(
+                    platform=args.platform,
+                    store=args.store,
+                    data_date=args.date,
+                    expected=expected,
+                    actual=actual,
+                    difference_categories=categories,
+                )
+            except (OSError, ValueError) as error:
+                print(f"Reconciliation import rejected: {error}")
+                return 2
+            print(
+                f"Reconciled {args.date.isoformat()} "
+                f"accuracy={result.accuracy}"
+            )
+            return 0
+        if args.reconcile_command == "report":
+            rows = service.report(
+                platform=args.platform,
+                store=args.store,
+                start=args.start,
+                end=args.end,
+            )
+            for row in rows:
+                print(
+                    f"{row.data_date.isoformat()} accuracy={row.accuracy} "
+                    f"differences={len(row.differences)}"
+                )
+            return 0
+        parser.print_help()
+        return 2
     if args.command == "approval":
         database.migrate()
         if args.approval_command == "serve":
@@ -660,7 +745,7 @@ def main(argv: list[str] | None = None) -> int:
             )
             try:
                 summaries.append(runner.run(collector, args.date))
-            except Exception as error:
+            except Exception as error:  # noqa: BLE001 - isolate each platform
                 collection_errors.append((platform.value, error))
                 print(
                     f"{platform.value} collection failed: "

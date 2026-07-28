@@ -126,6 +126,47 @@ def test_launch_checklist_cli_writes_markdown(tmp_path, monkeypatch, capsys):
     assert "live_allowlist" in output
 
 
+def test_reconciliation_csv_import_and_report(tmp_path, monkeypatch, capsys):
+    settings = Settings(data_dir=tmp_path)
+    monkeypatch.setattr(adwatch.cli.Settings, "from_env", lambda: settings)
+    source = tmp_path / "reconcile.csv"
+    source.write_text(
+        "field,expected,actual,category\n"
+        "orders,10,10,attribution\n"
+        "campaign_status,active,active,display_lag\n",
+        encoding="utf-8",
+    )
+    assert main(
+        [
+            "reconcile",
+            "import",
+            "--platform",
+            "shopee",
+            "--store",
+            "shop",
+            "--date",
+            "2026-07-28",
+            "--file",
+            str(source),
+        ]
+    ) == 0
+    assert main(
+        [
+            "reconcile",
+            "report",
+            "--platform",
+            "shopee",
+            "--store",
+            "shop",
+            "--from",
+            "2026-07-28",
+            "--to",
+            "2026-07-28",
+        ]
+    ) == 0
+    assert "accuracy=1.0000" in capsys.readouterr().out
+
+
 def test_order_costs_satisfy_launch_business_cost_gate(
     tmp_path, monkeypatch, capsys
 ):

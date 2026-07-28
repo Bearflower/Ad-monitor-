@@ -575,4 +575,23 @@ MIGRATIONS = [
             ADD COLUMN expected_impact_json TEXT NOT NULL DEFAULT '{}';
         """,
     ),
+    (
+        15,
+        """
+        CREATE TABLE reconciliation_days (
+            platform TEXT NOT NULL, store TEXT NOT NULL,
+            data_date TEXT NOT NULL, accuracy TEXT NOT NULL,
+            expected_json TEXT NOT NULL, actual_json TEXT NOT NULL,
+            differences_json TEXT NOT NULL, created_at TEXT NOT NULL,
+            PRIMARY KEY(platform, store, data_date)
+        );
+        CREATE TABLE strategy_replays (
+            id TEXT PRIMARY KEY, platform TEXT NOT NULL, store TEXT NOT NULL,
+            campaign_id TEXT NOT NULL, starts_on TEXT NOT NULL,
+            ends_on TEXT NOT NULL, rule_version_id TEXT,
+            matches_original INTEGER NOT NULL,
+            details_json TEXT NOT NULL, created_at TEXT NOT NULL
+        );
+        """,
+    ),
 ]
