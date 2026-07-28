@@ -56,30 +56,49 @@ def export_pending_sku_costs(database: Database, destination: Path) -> int:
 
 def import_sku_costs(database: Database, source: Path) -> int:
     workbook = load_workbook(source, data_only=True)
-    sheet = workbook["待补成本"]
-    headers = [cell.value for cell in sheet[1]]
-    if tuple(headers[: len(HEADERS)]) != HEADERS:
+    if "待补SKU成本" in workbook.sheetnames:
+        sheet = workbook["待补SKU成本"]
+        header_row = 5
+        expected = (
+            "平台", "店铺", "Seller SKU", "规格", "商品名称",
+            "首次订单日期", "最近订单日期", "相关订单数", "销售件数",
+            "退货件数", "净件数", "成本状态", "单件成本（人民币）",
+            "成本生效日期", "成本备注",
+        )
+        indexes = (0, 1, 2, 12, 13, 14)
+    else:
+        sheet = workbook["待补成本"]
+        header_row = 1
+        expected = HEADERS
+        indexes = (0, 1, 5, 14, 15, 16)
+    headers = [cell.value for cell in sheet[header_row]]
+    if tuple(headers[: len(expected)]) != expected:
         raise BusinessInputError("待补成本表头不匹配")
     values = []
-    for line, row in enumerate(sheet.iter_rows(min_row=2, values_only=True), 2):
-        raw_cost = row[14]
+    for line, row in enumerate(
+        sheet.iter_rows(min_row=header_row + 1, values_only=True),
+        header_row + 1,
+    ):
+        platform_index, store_index, sku_index, cost_index, date_index, note_index = indexes
+        raw_cost = row[cost_index]
         if raw_cost in (None, ""):
             continue
         try:
             cost = Decimal(str(raw_cost))
-            effective = _as_date(row[15])
+            effective = _as_date(row[date_index])
         except (InvalidOperation, ValueError) as error:
             raise BusinessInputError(f"第 {line} 行成本或日期无效") from error
-        if cost < 0 or not all(str(row[i] or "").strip() for i in (0, 1, 5)):
+        required = (platform_index, store_index, sku_index)
+        if cost < 0 or not all(str(row[i] or "").strip() for i in required):
             raise BusinessInputError(f"第 {line} 行必填值无效")
         values.append(
             (
-                str(row[0]).strip().lower(),
-                str(row[1]).strip(),
-                str(row[5]).strip(),
+                str(row[platform_index]).strip().lower(),
+                str(row[store_index]).strip(),
+                str(row[sku_index]).strip(),
                 effective.isoformat(),
                 str(cost),
-                str(row[16] or "").strip(),
+                str(row[note_index] or "").strip(),
             )
         )
     with database.transaction() as connection:
