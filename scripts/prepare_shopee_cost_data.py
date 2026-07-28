@@ -170,9 +170,7 @@ def main() -> None:
                 "net_quantity": values["quantity"] - values["returned_quantity"],
                 "cost_status": "已填写" if known_cost is not None else "待填写",
                 "unit_cost_cny": known_cost,
-                "cost_effective_date": (
-                    values["first_date"] if known_cost is not None else None
-                ),
+                "cost_effective_date": values["first_date"],
                 "cost_note": "历史已确认成本" if known_cost is not None else None,
             }
         )
