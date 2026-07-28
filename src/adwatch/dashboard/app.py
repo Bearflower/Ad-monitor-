@@ -2,13 +2,19 @@ from __future__ import annotations
 
 import html
 import json
+import secrets
 from dataclasses import asdict
 from datetime import date
 from decimal import Decimal
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
-from adwatch.dashboard.views import render_navigation
+from adwatch.dashboard.routes import DashboardRouter
+from adwatch.dashboard.views import render_navigation, render_operations_page
+from adwatch.inventory.service import InventoryService
+from adwatch.ledger.service import LedgerService
+from adwatch.orders.repository import OrderRepository
+from adwatch.profit_sharing.service import ProfitSharingService
 from adwatch.reporting.read_model import DailySnapshot, ReportReadModel
 from adwatch.storage.db import Database
 
@@ -236,6 +242,15 @@ def serve(
     default_date: date,
     simulated: bool,
 ) -> None:
+    csrf_token = secrets.token_urlsafe(32)
+    router = DashboardRouter(
+        LedgerService(database),
+        csrf_token=csrf_token,
+        inventory=InventoryService(database),
+        orders=OrderRepository(database),
+        profit_sharing=ProfitSharingService(database),
+    )
+
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:
             parsed = urlparse(self.path)
@@ -261,6 +276,9 @@ def serve(
                     sku=parse_qs(parsed.query).get("sku", [""])[0],
                 ).encode("utf-8")
                 content_type = "text/html; charset=utf-8"
+            elif parsed.path == "/operations":
+                body = render_operations_page(csrf_token).encode("utf-8")
+                content_type = "text/html; charset=utf-8"
             else:
                 self.send_error(404)
                 return
@@ -269,5 +287,23 @@ def serve(
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
+
+        def do_POST(self) -> None:
+            length = int(self.headers.get("Content-Length", "0"))
+            if length <= 0 or length > 1_000_000:
+                self.send_error(400, "invalid request body")
+                return
+            raw = self.rfile.read(length).decode("utf-8")
+            form = {
+                key: values[-1]
+                for key, values in parse_qs(raw, keep_blank_values=True).items()
+            }
+            response = router.post(urlparse(self.path).path, form)
+            if response.status == 303 and response.location:
+                self.send_response(303)
+                self.send_header("Location", response.location)
+                self.end_headers()
+                return
+            self.send_error(response.status, response.message)
 
     ThreadingHTTPServer((host, port), Handler).serve_forever()

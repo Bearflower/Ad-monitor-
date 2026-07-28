@@ -126,6 +126,16 @@ def render_operations_forms(csrf_token: str) -> str:
     """
 
 
+def render_operations_page(csrf_token: str) -> str:
+    return f"""<!doctype html>
+    <html lang="zh-CN"><head><meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <title>Adwatch 记账对账</title></head><body>
+    {render_navigation("/operations")}
+    <main><h1>记账对账</h1>{render_operations_forms(csrf_token)}</main>
+    </body></html>"""
+
+
 def render_optimization_center(
     *,
     platform_roas: str,

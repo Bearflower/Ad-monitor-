@@ -1,6 +1,7 @@
 from adwatch.dashboard.views import (
     render_navigation,
     render_operations_forms,
+    render_operations_page,
     render_optimization_center,
 )
 
@@ -22,6 +23,7 @@ def test_unified_navigation_and_forms_cover_core_business_modules():
     assert 'name="csrf_token" value="csrf"' in forms
     assert "费用／前期投入" in forms
     assert "资金性质" in forms
+    assert "记账对账" in render_operations_page("csrf")
 
 
 def test_optimization_center_explains_roas_evidence_and_execution_state():
