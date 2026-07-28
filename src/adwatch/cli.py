@@ -60,6 +60,7 @@ from adwatch.reporting.markdown import (
 from adwatch.reporting.quality import write_quality_report
 from adwatch.reporting.read_model import ReportReadModel
 from adwatch.storage.db import Database
+from adwatch.strategy.replay import StrategyReplayService
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -191,6 +192,18 @@ def build_parser() -> argparse.ArgumentParser:
         "--from", dest="start", type=date.fromisoformat, required=True
     )
     reconcile_report.add_argument(
+        "--to", dest="end", type=date.fromisoformat, required=True
+    )
+    strategy = subcommands.add_parser("strategy")
+    strategy_commands = strategy.add_subparsers(dest="strategy_command")
+    strategy_replay = strategy_commands.add_parser("replay")
+    strategy_replay.add_argument("--platform", required=True)
+    strategy_replay.add_argument("--store", required=True)
+    strategy_replay.add_argument("--campaign", required=True)
+    strategy_replay.add_argument(
+        "--from", dest="start", type=date.fromisoformat, required=True
+    )
+    strategy_replay.add_argument(
         "--to", dest="end", type=date.fromisoformat, required=True
     )
     return parser
@@ -434,6 +447,23 @@ def main(argv: list[str] | None = None) -> int:
                     f"differences={len(row.differences)}"
                 )
             return 0
+        parser.print_help()
+        return 2
+    if args.command == "strategy":
+        database.migrate()
+        if args.strategy_command == "replay":
+            result = StrategyReplayService(database).replay(
+                platform=args.platform,
+                store=args.store,
+                campaign_id=args.campaign,
+                start=args.start,
+                end=args.end,
+            )
+            print(
+                f"strategy_replay={result.status} checked={result.checked} "
+                f"mismatches={len(result.mismatches)}"
+            )
+            return 0 if result.status == "matched" else 2
         parser.print_help()
         return 2
     if args.command == "approval":

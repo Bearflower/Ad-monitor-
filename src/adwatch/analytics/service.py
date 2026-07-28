@@ -177,15 +177,61 @@ class AnalysisService:
                     available_test_budget=Decimal(
                         row["available_test_budget"] or "0"
                     ),
+                    net_sales_roas=(
+                        None
+                        if Decimal(row["spend"]) <= 0
+                        else (
+                            Decimal(row["attributed_gmv"])
+                            - Decimal(row["refund_amount"])
+                        )
+                        / Decimal(row["spend"])
+                    ),
+                    profit_roas=(
+                        None
+                        if Decimal(row["spend"]) <= 0
+                        else (
+                            profit.net_profit_cny
+                            + Decimal(row["spend"])
+                            * Decimal(row["rate_to_cny"])
+                        )
+                        / (
+                            Decimal(row["spend"])
+                            * Decimal(row["rate_to_cny"])
+                        )
+                    ),
+                    refund_rate=(
+                        Decimal(0)
+                        if Decimal(row["attributed_gmv"]) <= 0
+                        else Decimal(row["refund_amount"])
+                        / Decimal(row["attributed_gmv"])
+                    ),
+                    data_confidence="inventory_safe",
+                    rule_version_id="default-v1",
                 )
                 for item in recommend(context):
+                    evidence = {
+                        "strategy_context": {
+                            key: (
+                                value.isoformat()
+                                if isinstance(value, date)
+                                else str(value)
+                                if isinstance(value, Decimal)
+                                else value
+                            )
+                            for key, value in context.__dict__.items()
+                        }
+                    }
                     connection.execute(
                         """
                         INSERT INTO recommendations(
                             rule_code, platform, campaign_id, sku_id, data_date,
                             action, change_ratio, reason, requires_approval,
-                            store_id, amount
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            store_id, amount, rule_version_id, window_days,
+                            confidence_level, evidence_json,
+                            expected_before_json, expected_impact_json
+                        ) VALUES (
+                            ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+                        )
                         ON CONFLICT(
                             rule_code, platform, campaign_id, sku_id, data_date
                         ) DO UPDATE SET
@@ -195,6 +241,12 @@ class AnalysisService:
                             requires_approval=excluded.requires_approval,
                             store_id=excluded.store_id,
                             amount=excluded.amount,
+                            rule_version_id=excluded.rule_version_id,
+                            window_days=excluded.window_days,
+                            confidence_level=excluded.confidence_level,
+                            evidence_json=excluded.evidence_json,
+                            expected_before_json=excluded.expected_before_json,
+                            expected_impact_json=excluded.expected_impact_json,
                             updated_at=strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
                         """,
                         (
@@ -216,6 +268,28 @@ class AnalysisService:
                                 None
                                 if item.amount is None
                                 else f"{item.amount:.2f}"
+                            ),
+                            context.rule_version_id,
+                            7,
+                            context.data_confidence,
+                            json.dumps(evidence, sort_keys=True),
+                            json.dumps(
+                                {
+                                    "budget": str(context.current_budget),
+                                    "target_roas": str(context.target_roas),
+                                },
+                                sort_keys=True,
+                            ),
+                            json.dumps(
+                                {
+                                    "action": item.action,
+                                    "change_ratio": (
+                                        None
+                                        if item.change_ratio is None
+                                        else str(item.change_ratio)
+                                    ),
+                                },
+                                sort_keys=True,
                             ),
                         ),
                     )

@@ -594,4 +594,17 @@ MIGRATIONS = [
         );
         """,
     ),
+    (
+        16,
+        """
+        INSERT OR IGNORE INTO strategy_rule_versions(
+            id, version, effective_from, parameters_json,
+            created_by, created_at
+        ) VALUES (
+            'default-v1', 1, '2026-01-01',
+            '{"max_refund_rate":"0.30","min_inventory_days":"14"}',
+            'system', strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+        );
+        """,
+    ),
 ]

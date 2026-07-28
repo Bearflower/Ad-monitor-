@@ -167,6 +167,31 @@ def test_reconciliation_csv_import_and_report(tmp_path, monkeypatch, capsys):
     assert "accuracy=1.0000" in capsys.readouterr().out
 
 
+def test_strategy_replay_reports_pending_when_history_is_missing(
+    tmp_path, monkeypatch, capsys
+):
+    settings = Settings(data_dir=tmp_path)
+    monkeypatch.setattr(adwatch.cli.Settings, "from_env", lambda: settings)
+    result = main(
+        [
+            "strategy",
+            "replay",
+            "--platform",
+            "shopee",
+            "--store",
+            "shop",
+            "--campaign",
+            "C-1",
+            "--from",
+            "2026-07-01",
+            "--to",
+            "2026-07-28",
+        ]
+    )
+    assert result == 2
+    assert "pending_data" in capsys.readouterr().out
+
+
 def test_order_costs_satisfy_launch_business_cost_gate(
     tmp_path, monkeypatch, capsys
 ):
