@@ -31,3 +31,11 @@ class OptimizationResult:
     confidence_level: str
     attribution_capability: str
     evidence: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class OptimizationDiagnostic:
+    code: str
+    severity: str
+    message: str
+    evidence: tuple[str, ...]
