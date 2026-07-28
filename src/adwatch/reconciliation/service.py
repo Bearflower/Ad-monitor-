@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from dataclasses import asdict, dataclass
 from datetime import UTC, date, datetime, timedelta
-from decimal import ROUND_HALF_UP, Decimal
+from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 
 from adwatch.storage.db import Database
 
@@ -25,6 +25,34 @@ class ReconciliationDay:
 
 def _json_value(value: object) -> object:
     return str(value) if isinstance(value, Decimal) else value
+
+
+NUMERIC_TOLERANCE = Decimal("0.01")
+
+
+def _matches(expected: object, actual: object, category: str) -> bool:
+    if actual is None:
+        return False
+    if category in {"money", "ratio"}:
+        try:
+            difference = abs(
+                Decimal(str(expected)) - Decimal(str(actual))
+            )
+            return difference <= NUMERIC_TOLERANCE
+        except InvalidOperation:
+            return False
+    if category == "count":
+        try:
+            left = Decimal(str(expected))
+            right = Decimal(str(actual))
+        except InvalidOperation:
+            return False
+        return (
+            left == left.to_integral_value()
+            and right == right.to_integral_value()
+            and left == right
+        )
+    return str(expected).strip() == str(actual).strip()
 
 
 class ReconciliationService:
@@ -52,7 +80,11 @@ class ReconciliationService:
                 category=categories.get(field, "unknown"),
             )
             for field, value in expected.items()
-            if actual.get(field) != value
+            if not _matches(
+                value,
+                actual.get(field),
+                categories.get(field, "unknown"),
+            )
         )
         matched = len(expected) - len(differences)
         accuracy = (Decimal(matched) / Decimal(len(expected))).quantize(
