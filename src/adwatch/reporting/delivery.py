@@ -39,6 +39,8 @@ def deliver_report(
     report_dir: Path,
     webhook_url: str,
     transport: Transport | None = None,
+    header_template: str = "green",
+    risk_label: str = "正常",
 ) -> DeliveryResult:
     report_dir.mkdir(parents=True, exist_ok=True)
     path = report_dir / f"daily-{data_date.isoformat()}.md"
@@ -46,9 +48,12 @@ def deliver_report(
         "msg_type": "interactive",
         "card": {
             "header": {
+                "template": header_template,
                 "title": {
                     "tag": "plain_text",
-                    "content": f"广告每日快报 {data_date.isoformat()}",
+                    "content": (
+                        f"广告经营日报 {data_date.isoformat()}｜{risk_label}"
+                    ),
                 }
             },
             "elements": [{"tag": "markdown", "content": content}],

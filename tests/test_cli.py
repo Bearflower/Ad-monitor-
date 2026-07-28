@@ -445,7 +445,7 @@ def test_daily_report_cli_writes_local_file(tmp_path, monkeypatch, capsys):
 
     path = tmp_path / "reports" / "daily-2026-07-26.md"
     assert path.exists()
-    assert "# 广告每日快报 2026-07-26" in path.read_text()
+    assert "# 广告经营日报｜2026-07-26" in path.read_text()
     assert str(path) in capsys.readouterr().out
 
 

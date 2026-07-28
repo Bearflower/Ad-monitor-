@@ -1,5 +1,6 @@
 from datetime import date
 
+from adwatch.analytics.service import AnalysisService
 from adwatch.collectors.mock import MockCollector
 from adwatch.domain import Platform
 from adwatch.pipeline.runner import PipelineRunner
@@ -56,3 +57,27 @@ def test_dashboard_read_model_includes_trends_and_operations(tmp_path):
     assert snapshot.collection_runs
     assert snapshot.approval_counts["approved"] == 1
     assert snapshot.execution_counts["succeeded"] == 1
+
+
+def test_daily_read_model_includes_platform_profit_breakdown(tmp_path):
+    data_date = date(2026, 7, 22)
+    database = Database(tmp_path / "test.sqlite3")
+    database.migrate()
+    PipelineRunner(database).run(MockCollector(Platform.SHOPEE), data_date)
+    analysis = AnalysisService(database)
+    analysis.seed_mock_business_data(data_date)
+    analysis.run(data_date)
+
+    platform = ReportReadModel(database).daily(data_date).platforms[0]
+
+    assert platform.attributed_sales_cny is not None
+    assert platform.platform_fee_cny is not None
+    assert platform.ad_spend_cny is not None
+    assert platform.sku_and_other_cost_cny is not None
+    assert (
+        platform.attributed_sales_cny
+        - platform.platform_fee_cny
+        - platform.ad_spend_cny
+        - platform.sku_and_other_cost_cny
+        == platform.net_profit
+    )

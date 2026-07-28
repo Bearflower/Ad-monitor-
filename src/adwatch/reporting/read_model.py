@@ -15,6 +15,10 @@ class PlatformSummary:
     orders: int
     roas: Decimal | None
     net_profit: Decimal | None
+    attributed_sales_cny: Decimal | None
+    platform_fee_cny: Decimal | None
+    ad_spend_cny: Decimal | None
+    sku_and_other_cost_cny: Decimal | None
 
 
 @dataclass(frozen=True)
@@ -66,8 +70,17 @@ class ReportReadModel:
                 SELECT m.platform, SUM(CAST(m.spend AS REAL)) spend,
                        SUM(CAST(m.attributed_gmv AS REAL)) gmv,
                        SUM(m.orders) orders,
+                       SUM(CAST(p.net_sales_cny AS REAL))
+                           attributed_sales_cny,
+                       SUM(CAST(p.platform_commission_cny AS REAL))
+                           platform_fee_cny,
+                       SUM(
+                           CAST(m.spend AS REAL)
+                           * CAST(r.rate_to_cny AS REAL)
+                       ) ad_spend_cny,
                        SUM(CAST(p.net_profit_cny AS REAL)) net_profit,
                        COUNT(p.net_profit_cny) profit_count,
+                       COUNT(r.rate_to_cny) rate_count,
                        COUNT(m.id) metric_count
                 FROM daily_ad_metrics m
                 LEFT JOIN profit_results p
@@ -75,6 +88,8 @@ class ReportReadModel:
                  AND p.account_id=m.account_id
                  AND p.campaign_id=m.campaign_id AND p.sku_id=m.sku_id
                  AND p.data_date=m.data_date
+                LEFT JOIN exchange_rates r
+                  ON r.currency=m.currency AND r.rate_date=m.data_date
                 WHERE m.data_date=?
                 GROUP BY m.platform
                 ORDER BY m.platform
@@ -85,6 +100,38 @@ class ReportReadModel:
             for row in platform_rows:
                 spend = Decimal(str(row["spend"] or 0))
                 gmv = Decimal(str(row["gmv"] or 0))
+                breakdown_ready = (
+                    row["profit_count"] == row["metric_count"]
+                    and row["rate_count"] == row["metric_count"]
+                )
+                sales_cny = (
+                    Decimal(str(row["attributed_sales_cny"])).quantize(
+                        Decimal("0.01")
+                    )
+                    if breakdown_ready
+                    else None
+                )
+                platform_fee_cny = (
+                    Decimal(str(row["platform_fee_cny"])).quantize(
+                        Decimal("0.01")
+                    )
+                    if breakdown_ready
+                    else None
+                )
+                ad_spend_cny = (
+                    Decimal(str(row["ad_spend_cny"])).quantize(
+                        Decimal("0.01")
+                    )
+                    if breakdown_ready
+                    else None
+                )
+                net_profit = (
+                    Decimal(str(row["net_profit"])).quantize(
+                        Decimal("0.01")
+                    )
+                    if breakdown_ready
+                    else None
+                )
                 platforms.append(
                     PlatformSummary(
                         platform=row["platform"],
@@ -96,12 +143,19 @@ class ReportReadModel:
                             if spend == 0
                             else (gmv / spend).quantize(Decimal("0.0001"))
                         ),
-                        net_profit=(
+                        net_profit=net_profit,
+                        attributed_sales_cny=sales_cny,
+                        platform_fee_cny=platform_fee_cny,
+                        ad_spend_cny=ad_spend_cny,
+                        sku_and_other_cost_cny=(
                             None
-                            if row["profit_count"] < row["metric_count"]
-                            else Decimal(str(row["net_profit"])).quantize(
-                                Decimal("0.01")
-                            )
+                            if not breakdown_ready
+                            else (
+                                sales_cny
+                                - platform_fee_cny
+                                - ad_spend_cny
+                                - net_profit
+                            ).quantize(Decimal("0.01"))
                         ),
                     )
                 )

@@ -59,6 +59,7 @@ from adwatch.pipeline.runner import PipelineRunner
 from adwatch.reconciliation.service import ReconciliationService
 from adwatch.reporting.delivery import deliver_report
 from adwatch.reporting.markdown import (
+    present_daily_report,
     render_daily_markdown,
     render_monthly_markdown,
     render_weekly_markdown,
@@ -947,15 +948,17 @@ def main(argv: list[str] | None = None) -> int:
         if args.mode == "mock":
             analysis.seed_mock_business_data(args.date)
         analysis_summary = analysis.run(args.date)
-        markdown = render_daily_markdown(
+        presentation = present_daily_report(
             ReportReadModel(database).daily(args.date),
             simulated=args.mode == "mock",
         )
         delivery = deliver_report(
-            markdown,
+            presentation.markdown,
             data_date=args.date,
             report_dir=settings.report_dir,
             webhook_url=settings.feishu_webhook,
+            header_template=presentation.header_template,
+            risk_label=presentation.risk_label,
         )
         run_status = "partial" if collection_errors else "ok"
         print(
