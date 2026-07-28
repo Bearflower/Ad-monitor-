@@ -92,6 +92,37 @@ def render_operations_forms(csrf_token: str) -> str:
         <button>登记并排除真实指标</button>
       </form>
     </section>
+    <section class="panel"><h2>SKU 成本与采购入库</h2>
+      <form method="post" action="/sku-costs">
+        <input type="hidden" name="csrf_token" value="{token}">
+        <input name="platform" placeholder="平台" required>
+        <input name="store" placeholder="店铺" required>
+        <input name="seller_sku" placeholder="Seller SKU" required>
+        <input type="date" name="effective_date" required>
+        <input name="unit_cost_cny" placeholder="人民币单位成本" required>
+        <input name="note" placeholder="备注">
+        <button>新增成本版本</button>
+      </form>
+      <form method="post" action="/purchases">
+        <input type="hidden" name="csrf_token" value="{token}">
+        <input name="receipt_id" placeholder="采购单号" required>
+        <input name="supplier" placeholder="供应商" required>
+        <input type="date" name="received_on" required>
+        <input name="seller_sku" placeholder="Seller SKU" required>
+        <input name="quantity" placeholder="入库数量" required>
+        <input name="unit_cost_cny" placeholder="人民币单位成本" required>
+        <button>采购入库</button>
+      </form>
+    </section>
+    <section class="panel"><h2>分润协议</h2>
+      <form method="post" action="/profit-agreements">
+        <input type="hidden" name="csrf_token" value="{token}">
+        <input type="date" name="effective_from" required>
+        <label>洁云比例 <input name="jieyun_share" value="0.60"></label>
+        <label>苏姐比例 <input name="sujie_share" value="0.40"></label>
+        <button>新增协议版本</button>
+      </form>
+    </section>
     """
 
 

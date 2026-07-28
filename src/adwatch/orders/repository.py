@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
+from datetime import date
+from decimal import Decimal
 
 from adwatch.orders.models import PlatformOrderLine, PlatformSku
 from adwatch.storage.db import Database
@@ -120,3 +122,37 @@ class OrderRepository:
                 ORDER BY sku.store, sku.product_name, sku.variation_name
                 """
             ).fetchall()
+
+    def set_sku_cost(
+        self,
+        *,
+        platform: str,
+        store: str,
+        seller_sku: str,
+        effective_date: date,
+        unit_cost_cny: Decimal,
+        note: str = "",
+    ) -> None:
+        if unit_cost_cny <= 0:
+            raise ValueError("unit cost must be positive")
+        with self.database.transaction() as connection:
+            connection.execute(
+                """
+                INSERT INTO sku_cost_history(
+                    platform, store, seller_sku, effective_date,
+                    unit_cost_cny, note
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(platform, store, seller_sku, effective_date)
+                DO UPDATE SET unit_cost_cny=excluded.unit_cost_cny,
+                              note=excluded.note,
+                              updated_at=strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+                """,
+                (
+                    platform,
+                    store,
+                    seller_sku,
+                    effective_date.isoformat(),
+                    str(unit_cost_cny),
+                    note,
+                ),
+            )

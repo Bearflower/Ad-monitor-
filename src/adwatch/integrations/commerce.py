@@ -46,6 +46,68 @@ class SettlementRecord:
     source: str
 
 
+@dataclass(frozen=True)
+class AdFundingRecord:
+    external_key: str
+    platform: str
+    store: str
+    occurred_on: date
+    entry_type: str
+    amount_original: Decimal
+    currency: str
+    rate_to_cny: Decimal
+    source: str
+
+
+@dataclass(frozen=True)
+class AdSpendRecord:
+    external_key: str
+    platform: str
+    store: str
+    campaign_id: str
+    occurred_on: date
+    amount_original: Decimal
+    currency: str
+    rate_to_cny: Decimal
+    source: str
+
+
+@dataclass(frozen=True)
+class RefundRecord:
+    external_key: str
+    platform: str
+    store: str
+    order_id: str
+    occurred_on: date
+    amount_original: Decimal
+    currency: str
+    status: str
+
+
+@dataclass(frozen=True)
+class LogisticsRecord:
+    external_key: str
+    platform: str
+    store: str
+    order_id: str
+    occurred_on: date
+    logistics_status: str
+    tracking_number: str
+
+
+@dataclass(frozen=True)
+class PlatformFeeRecord:
+    external_key: str
+    platform: str
+    store: str
+    order_id: str
+    occurred_on: date
+    fee_type: str
+    amount_original: Decimal
+    currency: str
+    rate_to_cny: Decimal
+
+
 class CommerceRepository:
     def __init__(self, database: Database) -> None:
         self.database = database

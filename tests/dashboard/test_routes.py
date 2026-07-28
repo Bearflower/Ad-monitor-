@@ -1,5 +1,8 @@
 from adwatch.dashboard.routes import DashboardRouter
+from adwatch.inventory.service import InventoryService
 from adwatch.ledger.service import LedgerService
+from adwatch.orders.repository import OrderRepository
+from adwatch.profit_sharing.service import ProfitSharingService
 from adwatch.storage.db import Database
 
 
@@ -96,3 +99,49 @@ def test_finance_write_routes_cover_capital_withdrawal_funding_and_review(tmp_pa
             },
         )
         assert response.status == 303
+
+
+def test_inventory_sku_cost_and_profit_routes_are_writable(tmp_path):
+    database = Database(tmp_path / "web.sqlite3")
+    database.migrate()
+    router = DashboardRouter(
+        LedgerService(database),
+        csrf_token="secret",
+        inventory=InventoryService(database),
+        orders=OrderRepository(database),
+        profit_sharing=ProfitSharingService(database),
+    )
+    common = {"csrf_token": "secret"}
+    assert router.post(
+        "/sku-costs",
+        {
+            **common,
+            "platform": "shopee",
+            "store": "shop",
+            "seller_sku": "SKU-1",
+            "effective_date": "2026-07-01",
+            "unit_cost_cny": "5",
+            "note": "首版",
+        },
+    ).status == 303
+    assert router.post(
+        "/purchases",
+        {
+            **common,
+            "receipt_id": "PO-1",
+            "supplier": "工厂",
+            "received_on": "2026-07-28",
+            "seller_sku": "SKU-1",
+            "quantity": "10",
+            "unit_cost_cny": "5",
+        },
+    ).status == 303
+    assert router.post(
+        "/profit-agreements",
+        {
+            **common,
+            "effective_from": "2026-01-01",
+            "jieyun_share": "0.60",
+            "sujie_share": "0.40",
+        },
+    ).status == 303

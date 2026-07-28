@@ -2,8 +2,12 @@ from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal, InvalidOperation
 
+from adwatch.inventory.models import PurchaseLine
+from adwatch.inventory.service import InventoryService
 from adwatch.ledger.models import ExpenseDraft
 from adwatch.ledger.service import LedgerError, LedgerService
+from adwatch.orders.repository import OrderRepository
+from adwatch.profit_sharing.service import ProfitSharingService
 
 
 @dataclass(frozen=True)
@@ -14,14 +18,60 @@ class RouteResponse:
 
 
 class DashboardRouter:
-    def __init__(self, ledger: LedgerService, *, csrf_token: str) -> None:
+    def __init__(
+        self,
+        ledger: LedgerService,
+        *,
+        csrf_token: str,
+        inventory: InventoryService | None = None,
+        orders: OrderRepository | None = None,
+        profit_sharing: ProfitSharingService | None = None,
+    ) -> None:
         self.ledger = ledger
         self.csrf_token = csrf_token
+        self.inventory = inventory
+        self.orders = orders
+        self.profit_sharing = profit_sharing
 
     def post(self, path: str, form: dict[str, str]) -> RouteResponse:
         if form.get("csrf_token") != self.csrf_token:
             return RouteResponse(403, message="invalid CSRF token")
         try:
+            if path == "/sku-costs" and self.orders:
+                self.orders.set_sku_cost(
+                    platform=form["platform"],
+                    store=form["store"],
+                    seller_sku=form["seller_sku"],
+                    effective_date=date.fromisoformat(form["effective_date"]),
+                    unit_cost_cny=Decimal(form["unit_cost_cny"]),
+                    note=form.get("note", ""),
+                )
+                return RouteResponse(303, location="/inventory")
+            if path == "/purchases" and self.inventory:
+                self.inventory.receive_purchase(
+                    receipt_id=form["receipt_id"],
+                    supplier=form["supplier"],
+                    received_on=date.fromisoformat(form["received_on"]),
+                    lines=(
+                        PurchaseLine(
+                            form["seller_sku"],
+                            int(form["quantity"]),
+                            Decimal(form["unit_cost_cny"]),
+                        ),
+                    ),
+                    actor="local-web",
+                )
+                return RouteResponse(303, location="/inventory")
+            if path == "/profit-agreements" and self.profit_sharing:
+                self.profit_sharing.create_agreement(
+                    effective_from=date.fromisoformat(form["effective_from"]),
+                    shares={
+                        "洁云": Decimal(form["jieyun_share"]),
+                        "苏姐": Decimal(form["sujie_share"]),
+                    },
+                    actor="local-web",
+                )
+                return RouteResponse(303, location="/profit-sharing")
             occurred_on = date.fromisoformat(form["occurred_on"])
             if path == "/capital":
                 self.ledger.create_capital(

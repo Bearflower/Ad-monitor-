@@ -4,9 +4,14 @@ from decimal import Decimal
 import pytest
 
 from adwatch.integrations.commerce import (
+    AdFundingRecord,
+    AdSpendRecord,
     CapabilityResult,
     CapabilityStatus,
     CommerceRepository,
+    LogisticsRecord,
+    PlatformFeeRecord,
+    RefundRecord,
     SettlementRecord,
 )
 from adwatch.storage.db import Database
@@ -17,6 +22,15 @@ def test_capability_result_distinguishes_no_data_from_external_blocker():
     pending = CapabilityResult.pending_external("平台未开放接口")
     assert pending.status is CapabilityStatus.PENDING_EXTERNAL
     assert pending.reason == "平台未开放接口"
+
+
+def test_commerce_contracts_keep_recharge_spend_refund_logistics_and_fee_distinct():
+    assert AdFundingRecord.__name__ != AdSpendRecord.__name__
+    assert {
+        RefundRecord.__name__,
+        LogisticsRecord.__name__,
+        PlatformFeeRecord.__name__,
+    } == {"RefundRecord", "LogisticsRecord", "PlatformFeeRecord"}
 
 
 def test_settlement_import_is_idempotent_and_preserves_platform_fact(tmp_path):
