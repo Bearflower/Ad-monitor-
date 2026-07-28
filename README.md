@@ -172,7 +172,44 @@ Live 必须同时满足审批有效、熔断关闭、全局开关开启和
 python -m adwatch dashboard --host 127.0.0.1 --port 8765 --date 2026-07-22
 ```
 
-浏览器打开 `http://127.0.0.1:8765`。看板只读，远程监听必须显式添加 `--allow-remote`。
+浏览器打开 `http://127.0.0.1:8765`。统一导航覆盖今日经营、广告调优、
+收入与广告资金、SKU 与库存、记账对账、合伙人分润和审批执行。
+经营写入经过 CSRF、金额、状态和审计校验；平台原始结算记录不可由人工
+覆盖，只能新增调整或冲销记录。远程监听必须显式添加 `--allow-remote`。
+
+系统同时保留三种广告口径：
+
+- 平台 ROAS：平台归因 GMV ÷ 实际广告消耗；
+- 净销售 ROAS：扣除取消、退款和刷单后的销售额 ÷ 实际广告消耗；
+- 利润 ROAS：广告前订单贡献毛利 ÷ 实际广告消耗。
+
+采购付款只影响现金和库存，销售出库成本才进入利润；广告充值只影响
+现金和广告预付余额，实际广告消耗才进入利润和 ROAS。
+
+## 三日对账
+
+每个平台/店铺每天准备一份 UTF-8 CSV：
+
+```csv
+field,expected,actual,category
+spend,100.00,100.00,display_lag
+gmv,500.00,500.00,attribution
+orders,10,10,attribution
+campaign_status,active,active,display_lag
+```
+
+```bash
+.venv/bin/adwatch reconcile import \
+  --platform shopee --store 虾皮泰国 --date 2026-07-28 \
+  --file reconcile-2026-07-28.csv
+.venv/bin/adwatch reconcile report \
+  --platform shopee --store 虾皮泰国 \
+  --from 2026-07-26 --to 2026-07-28
+```
+
+只有连续三个自然日均达到 99%，`launch-checklist` 才会通过
+`three_day_reconciliation`；即使配置了 Live 精确白名单，三日门禁
+未通过时仍不会把 `live_allowlist` 标记为就绪。
 
 ## 调度配置
 
