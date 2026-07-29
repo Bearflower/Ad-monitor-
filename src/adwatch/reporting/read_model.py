@@ -49,6 +49,7 @@ class TrendPoint:
     spend: Decimal
     gmv: Decimal
     roas: Decimal | None
+    net_profit: Decimal | None
 
 
 @dataclass(frozen=True)
@@ -342,13 +343,21 @@ class ReportReadModel:
         with self.database.connect() as connection:
             trend_rows = connection.execute(
                 """
-                SELECT data_date,
-                       SUM(CAST(spend AS REAL)) spend,
-                       SUM(CAST(attributed_gmv AS REAL)) gmv
-                FROM daily_ad_metrics
-                WHERE data_date BETWEEN ? AND ?
-                GROUP BY data_date
-                ORDER BY data_date
+                SELECT m.data_date,
+                       SUM(CAST(m.spend AS REAL)) spend,
+                       SUM(CAST(m.attributed_gmv AS REAL)) gmv,
+                       SUM(CAST(p.net_profit_cny AS REAL)) net_profit,
+                       COUNT(p.net_profit_cny) profit_count,
+                       COUNT(m.id) metric_count
+                FROM daily_ad_metrics AS m
+                LEFT JOIN profit_results AS p
+                  ON p.platform=m.platform AND p.store=m.store
+                 AND p.account_id=m.account_id
+                 AND p.campaign_id=m.campaign_id AND p.sku_id=m.sku_id
+                 AND p.data_date=m.data_date
+                WHERE m.data_date BETWEEN ? AND ?
+                GROUP BY m.data_date
+                ORDER BY m.data_date
                 """,
                 (start.isoformat(), data_date.isoformat()),
             ).fetchall()
@@ -361,6 +370,13 @@ class ReportReadModel:
                         None
                         if not row["spend"]
                         else Decimal(str(row["gmv"] / row["spend"]))
+                    ),
+                    net_profit=(
+                        None
+                        if row["profit_count"] != row["metric_count"]
+                        else Decimal(str(row["net_profit"] or 0)).quantize(
+                            Decimal("0.01")
+                        )
                     ),
                 )
                 for row in trend_rows

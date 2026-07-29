@@ -105,7 +105,7 @@ def render_dashboard(
         "<section class=\"panel\"><h2>"
         f"{days} 天趋势</h2><div class=\"table-wrap\"><table>"
         "<thead><tr><th>日期</th><th>消耗</th><th>GMV</th><th>ROAS</th>"
-        "</tr></thead><tbody>"
+        "<th>净利润</th></tr></thead><tbody>"
         + (
             "".join(
                 "<tr>"
@@ -113,10 +113,11 @@ def render_dashboard(
                 f"<td>{_format_decimal(point.spend)}</td>"
                 f"<td>{_format_decimal(point.gmv)}</td>"
                 f"<td>{_format_decimal(point.roas)}</td>"
+                f"<td>{_format_cny(point.net_profit)}</td>"
                 "</tr>"
                 for point in points
             )
-            or '<tr><td colspan="4">暂无数据</td></tr>'
+            or '<tr><td colspan="5">暂无数据</td></tr>'
         )
         + "</tbody></table></div></section>"
         for days, points in dashboard_snapshot.trends.items()

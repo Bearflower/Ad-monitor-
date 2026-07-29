@@ -83,3 +83,4 @@ def test_real_dashboard_formats_net_profit_as_cny(tmp_path):
     assert "真实数据" in page
     assert "<dt>净利润</dt><dd>" in page
     assert "¥" in page
+    assert "<th>日期</th><th>消耗</th><th>GMV</th><th>ROAS</th><th>净利润</th>" in page

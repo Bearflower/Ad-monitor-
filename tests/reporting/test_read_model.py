@@ -60,6 +60,21 @@ def test_dashboard_read_model_includes_trends_and_operations(tmp_path):
     assert snapshot.execution_counts["succeeded"] == 1
 
 
+def test_dashboard_trend_includes_net_profit_when_analysis_is_complete(tmp_path):
+    data_date = date(2026, 7, 23)
+    database = Database(tmp_path / "test.sqlite3")
+    database.migrate()
+    PipelineRunner(database).run(MockCollector(Platform.SHOPEE), data_date)
+    analysis = AnalysisService(database)
+    analysis.seed_mock_business_data(data_date)
+    analysis.run(data_date)
+
+    point = ReportReadModel(database).dashboard(data_date).trends[7][-1]
+
+    assert point.data_date == data_date
+    assert point.net_profit is not None
+
+
 def test_daily_read_model_includes_platform_profit_breakdown(tmp_path):
     data_date = date(2026, 7, 22)
     database = Database(tmp_path / "test.sqlite3")
