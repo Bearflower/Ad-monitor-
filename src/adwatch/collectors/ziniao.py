@@ -77,6 +77,41 @@ def parse_shopee_campaign_summary(
     )
 
 
+def parse_shopee_overview(
+    overview: dict[str, object],
+    *,
+    store: str,
+    account_id: str,
+    data_date: date,
+) -> DailyAdMetric:
+    spend = _primary_decimal(str(overview.get("expense", "")))
+    attributed_gmv = _primary_decimal(str(overview.get("sales", "")))
+    orders = int(_primary_decimal(str(overview.get("orders", ""))))
+    reported_roas = _primary_decimal(str(overview.get("roas", "")))
+    calculated_roas = (
+        attributed_gmv / spend if spend > 0 else Decimal(0)
+    ).quantize(Decimal("0.01"))
+    if calculated_roas != reported_roas.quantize(Decimal("0.01")):
+        raise ValueError(
+            "Shopee overview failed ROAS consistency check: "
+            f"sales={attributed_gmv}, expense={spend}, "
+            f"reported={reported_roas}, calculated={calculated_roas}"
+        )
+    return DailyAdMetric(
+        platform=Platform.SHOPEE,
+        store=store,
+        account_id=account_id,
+        campaign_id="Shop GMV Max",
+        sku_id="__ALL__",
+        data_date=data_date,
+        currency="THB",
+        spend=spend,
+        attributed_gmv=attributed_gmv,
+        orders=orders,
+        source="ziniao-cli",
+    )
+
+
 def parse_tiktok_campaign_rows(
     rows: list[dict[str, object]],
     *,
@@ -160,6 +195,16 @@ class ZiniaoCollector:
         if isinstance(first_page, list):
             rows = first_page
         elif isinstance(first_page, dict):
+            overview = first_page.get("overview")
+            if isinstance(overview, dict):
+                return [
+                    parse_shopee_overview(
+                        overview,
+                        store=self.settings.ziniao_shopee_store_name,
+                        account_id=store_id,
+                        data_date=data_date,
+                    )
+                ]
             summary = first_page.get("summary")
             if isinstance(summary, dict):
                 return [
@@ -170,23 +215,9 @@ class ZiniaoCollector:
                         data_date=data_date,
                     )
                 ]
-            rows = list(first_page.get("rows", []))
-            current_page = int(first_page.get("page", 1))
-            total_pages = int(first_page.get("total", 1))
-            while current_page < total_pages:
-                self.cli_client.page_exec(store_id, SHOPEE_NEXT_PAGE_SCRIPT)
-                next_page = self.cli_client.page_exec_until(
-                    store_id,
-                    SHOPEE_PAGE_SCRIPT,
-                    ready=lambda value, previous=current_page: (
-                        isinstance(value, dict)
-                        and int(value.get("page", 0)) > previous
-                        and bool(value.get("rows"))
-                    ),
-                )
-                rows.extend(next_page["rows"])
-                current_page = int(next_page["page"])
-                total_pages = int(next_page["total"])
+            raise ValueError(
+                "Shopee Ads page did not expose a labeled overview"
+            )
         else:
             raise TypeError("Shopee Ads page returned an invalid result")
         return parse_shopee_product_rows(
@@ -218,41 +249,22 @@ def _thailand_day_timestamps(data_date: date) -> tuple[int, int]:
 
 SHOPEE_PAGE_SCRIPT = r"""
 JSON.stringify((()=>{
-  const size=document.querySelector(".eds-pagination-sizes__content");
-  if(size&&!size.textContent.trim().startsWith("50")){
-    size.click();
-    const option=Array.from(
-      document.querySelectorAll(".eds-pagination-sizes__popper li")
-    ).find(e=>(e.innerText||e.textContent||"").trim()==="50");
-    if(option) option.click();
-    return null;
-  }
-  const tables=Array.from(document.querySelectorAll("table"));
-  const rows=t=>Array.from(t.querySelectorAll("tbody tr")).map(r=>
-    Array.from(r.querySelectorAll("td")).map(c=>
-      (c.innerText||c.textContent||"").trim().replace(/\s+/g," ")
-    )
-  );
-  const nameRows=tables.map(rows).find(rs=>rs.some(r=>r.join(" ").includes("ID:")))||[];
-  const metricRows=tables.map(rows).find(rs=>
-    rs.length===nameRows.length&&rs.some(r=>r.length>=6)
-  )||[];
-  const page=Number(
-    document.querySelector(".eds-pager__current")?.textContent||1
-  );
-  const total=Number(
-    document.querySelector(".eds-pager__total")?.textContent||1
-  );
-  const productRows=nameRows.map((r,i)=>({
-      campaign:"Shop GMV Max",
-      product:r.join(" "),
-      metrics:metricRows[i]||[]
-    })).filter(r=>r.product.includes("ID:"));
-  const summary=nameRows.length&&metricRows.length?{
-    campaign:"Shop GMV Max",
-    metrics:metricRows[0]||[]
-  }:null;
-  return productRows.length?{page,total,summary,rows:productRows}:null;
+  const lines=(document.body.innerText||"").split(/\n/).map(
+    value=>value.trim().replace(/\s+/g," ")
+  ).filter(Boolean);
+  const valueAfter=labels=>{
+    const index=lines.findIndex(line=>labels.includes(line));
+    return index>=0?lines[index+1]||"":null;
+  };
+  const overview={
+    expense:valueAfter(["Expense","ค่าใช้จ่าย"]),
+    sales:valueAfter(["Sales","ยอดขาย"]),
+    orders:valueAfter(["Orders","คำสั่งซื้อ"]),
+    items_sold:valueAfter(["Items Sold","สินค้าที่ขายได้"]),
+    roas:valueAfter(["ROAS"])
+  };
+  const hasOverview=Object.values(overview).every(value=>value!==null);
+  return hasOverview?{overview}:null;
 })())
 """.strip()
 

@@ -7,6 +7,7 @@ from adwatch.collectors.ziniao import (
     ZiniaoCollector,
     ZiniaoNotConfigured,
     parse_shopee_campaign_summary,
+    parse_shopee_overview,
     parse_shopee_product_rows,
     parse_tiktok_campaign_rows,
 )
@@ -100,6 +101,43 @@ def test_parse_shopee_campaign_summary_creates_single_all_products_metric():
     assert metric.orders == 2
 
 
+def test_parse_shopee_overview_uses_orders_instead_of_items_sold():
+    metric = parse_shopee_overview(
+        {
+            "expense": "฿210.10",
+            "sales": "฿179.00",
+            "orders": "2",
+            "items_sold": "3",
+            "roas": "0.85",
+        },
+        store="虾皮泰国",
+        account_id="27679338786521",
+        data_date=date(2026, 7, 28),
+    )
+
+    assert metric.spend == Decimal("210.10")
+    assert metric.attributed_gmv == Decimal("179.00")
+    assert metric.orders == 2
+    assert metric.roas == Decimal("0.8520")
+    assert metric.campaign_id == "Shop GMV Max"
+
+
+def test_parse_shopee_overview_rejects_inconsistent_roas():
+    with pytest.raises(ValueError, match="ROAS consistency"):
+        parse_shopee_overview(
+            {
+                "expense": "฿160.38",
+                "sales": "฿179.00",
+                "orders": "3",
+                "items_sold": "3",
+                "roas": "0.85",
+            },
+            store="虾皮泰国",
+            account_id="27679338786521",
+            data_date=date(2026, 7, 28),
+        )
+
+
 class FakeCliClient:
     def __init__(self, result):
         self.result = result
@@ -162,7 +200,9 @@ def test_shopee_collector_requests_one_thailand_calendar_day(tmp_path):
     assert "to=1784739599" in url
     assert expected_url == "from=1784653200&to=1784739599"
     assert require_nonempty is True
-    assert "querySelectorAll" in script
+    assert '"Expense"' in script
+    assert '"Orders"' in script
+    assert '"Items Sold"' in script
 
 
 def test_tiktok_collector_returns_empty_when_dashboard_has_no_campaigns(tmp_path):
@@ -235,45 +275,6 @@ def test_tiktok_collector_uses_campaign_extraction_script(tmp_path):
     assert "campaign_id" in client.calls[0][2]
 
 
-def test_shopee_collector_merges_all_paginated_product_rows(tmp_path):
-    def row(sku):
-        return {
-            "campaign": "Shop GMV Max",
-            "product": f"Product ID: {sku}",
-            "metrics": ["100", "10", "10%", "฿10", "฿30", "1"],
-        }
-
-    class PagedClient:
-        def __init__(self):
-            self.next_clicks = 0
-
-        def navigate_and_exec(self, *args, **kwargs):
-            return {"page": 1, "total": 2, "rows": [row("101")]}
-
-        def page_exec(self, store_id, script):
-            self.next_clicks += 1
-            return "clicked"
-
-        def page_exec_until(self, store_id, script, *, ready, attempts=15):
-            result = {"page": 2, "total": 2, "rows": [row("202")]}
-            assert ready(result)
-            return result
-
-    client = PagedClient()
-    settings = Settings(
-        data_dir=tmp_path,
-        ziniao_shopee_store_id="27679338786521",
-        ziniao_shopee_store_name="虾皮泰国",
-    )
-
-    metrics = ZiniaoCollector(
-        settings, Platform.SHOPEE, cli_client=client
-    ).collect(date(2026, 7, 23))
-
-    assert {metric.sku_id for metric in metrics} == {"101", "202"}
-    assert client.next_clicks == 1
-
-
 def test_shopee_collector_prefers_campaign_summary_over_partial_sku_rows(
     tmp_path,
 ):
@@ -307,3 +308,65 @@ def test_shopee_collector_prefers_campaign_summary_over_partial_sku_rows(
     assert len(metrics) == 1
     assert metrics[0].sku_id == "__ALL__"
     assert metrics[0].spend == Decimal("36.33")
+
+
+def test_shopee_collector_prefers_labeled_overview_over_product_rows(tmp_path):
+    client = FakeCliClient(
+        {
+            "overview": {
+                "expense": "฿210.10",
+                "sales": "฿179.00",
+                "orders": "2",
+                "items_sold": "3",
+                "roas": "0.85",
+            },
+            "page": 1,
+            "total": 1,
+            "rows": [
+                {
+                    "campaign": "Shop GMV Max",
+                    "product": "Product ID: 101",
+                    "metrics": ["50", "5", "10%", "฿160.38", "฿179", "3"],
+                }
+            ],
+        }
+    )
+    settings = Settings(
+        data_dir=tmp_path,
+        ziniao_shopee_store_id="27679338786521",
+        ziniao_shopee_store_name="虾皮泰国",
+    )
+
+    metrics = ZiniaoCollector(
+        settings, Platform.SHOPEE, cli_client=client
+    ).collect(date(2026, 7, 28))
+
+    assert len(metrics) == 1
+    assert metrics[0].spend == Decimal("210.10")
+    assert metrics[0].orders == 2
+
+
+def test_shopee_collector_rejects_product_rows_without_labeled_overview(tmp_path):
+    client = FakeCliClient(
+        {
+            "page": 1,
+            "total": 1,
+            "rows": [
+                {
+                    "campaign": "Shop GMV Max",
+                    "product": "Product ID: 101",
+                    "metrics": ["50", "5", "10%", "฿160.38", "฿179", "3"],
+                }
+            ],
+        }
+    )
+    settings = Settings(
+        data_dir=tmp_path,
+        ziniao_shopee_store_id="27679338786521",
+        ziniao_shopee_store_name="虾皮泰国",
+    )
+
+    with pytest.raises(ValueError, match="labeled overview"):
+        ZiniaoCollector(
+            settings, Platform.SHOPEE, cli_client=client
+        ).collect(date(2026, 7, 28))
