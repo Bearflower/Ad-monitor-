@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from datetime import date, timedelta
 from decimal import Decimal
 
+from adwatch.reporting.break_even import BreakEvenTarget, calculate_break_even
 from adwatch.storage.db import Database
 
 
@@ -19,6 +20,7 @@ class PlatformSummary:
     platform_fee_cny: Decimal | None
     ad_spend_cny: Decimal | None
     sku_and_other_cost_cny: Decimal | None
+    break_even_target: BreakEvenTarget | None = None
 
 
 @dataclass(frozen=True)
@@ -96,6 +98,29 @@ class ReportReadModel:
                 """,
                 (day,),
             ).fetchall()
+            matched_cost_orders = {
+                row["platform"]: int(row["matched_orders"])
+                for row in connection.execute(
+                    """
+                    SELECT orders.platform,
+                           COUNT(DISTINCT orders.store || ':' || orders.order_id)
+                               AS matched_orders
+                    FROM platform_order_lines AS orders
+                    WHERE substr(orders.ordered_at, 1, 10)=?
+                      AND EXISTS (
+                          SELECT 1
+                          FROM order_cost_snapshots AS costs
+                          WHERE costs.platform=orders.platform
+                            AND costs.store=orders.store
+                            AND costs.order_id=orders.order_id
+                            AND costs.seller_sku=orders.seller_sku
+                            AND costs.status='confirmed'
+                      )
+                    GROUP BY orders.platform
+                    """,
+                    (day,),
+                ).fetchall()
+            }
             platforms = []
             for row in platform_rows:
                 spend = Decimal(str(row["spend"] or 0))
@@ -132,6 +157,16 @@ class ReportReadModel:
                     if breakdown_ready
                     else None
                 )
+                variable_cost_cny = (
+                    None
+                    if not breakdown_ready
+                    else (
+                        sales_cny
+                        - platform_fee_cny
+                        - ad_spend_cny
+                        - net_profit
+                    ).quantize(Decimal("0.01"))
+                )
                 platforms.append(
                     PlatformSummary(
                         platform=row["platform"],
@@ -147,15 +182,17 @@ class ReportReadModel:
                         attributed_sales_cny=sales_cny,
                         platform_fee_cny=platform_fee_cny,
                         ad_spend_cny=ad_spend_cny,
-                        sku_and_other_cost_cny=(
-                            None
-                            if not breakdown_ready
-                            else (
-                                sales_cny
-                                - platform_fee_cny
-                                - ad_spend_cny
-                                - net_profit
-                            ).quantize(Decimal("0.01"))
+                        sku_and_other_cost_cny=variable_cost_cny,
+                        break_even_target=calculate_break_even(
+                            spend=spend,
+                            gmv=gmv,
+                            orders=int(row["orders"] or 0),
+                            attributed_sales_cny=sales_cny,
+                            platform_fee_cny=platform_fee_cny,
+                            variable_cost_cny=variable_cost_cny,
+                            matched_cost_orders=matched_cost_orders.get(
+                                row["platform"], 0
+                            ),
                         ),
                     )
                 )

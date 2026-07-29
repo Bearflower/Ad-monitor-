@@ -5,6 +5,7 @@ from adwatch.analytics.service import AnalysisService
 from adwatch.collectors.mock import MockCollector
 from adwatch.domain import Platform
 from adwatch.pipeline.runner import PipelineRunner
+from adwatch.reporting.break_even import BreakEvenTarget
 from adwatch.reporting.markdown import (
     present_daily_report,
     render_daily_markdown,
@@ -35,9 +36,10 @@ def test_daily_report_contains_required_sections(tmp_path):
 
     for heading in (
         "一、核心经营结果",
-        "二、平台表现",
-        "三、异常与风险",
-        "四、建议动作",
+        "二、保本目标",
+        "三、平台表现",
+        "四、异常与风险",
+        "五、建议动作",
     ):
         assert heading in report
     assert "模拟数据" in report
@@ -123,3 +125,72 @@ def test_daily_report_is_chinese_and_explains_risk_and_action():
     assert "库存安全策略：待补数据" in presentation.markdown
     assert "pending_data" not in presentation.markdown
     assert "TOP3/BOTTOM3" not in presentation.markdown
+
+
+def test_daily_report_displays_break_even_target_and_reconciliation_status():
+    snapshot = DailySnapshot(
+        data_date=date(2026, 7, 28),
+        platforms=(
+            PlatformSummary(
+                platform="shopee",
+                spend=Decimal("210.10"),
+                gmv=Decimal("179.00"),
+                orders=2,
+                roas=Decimal("0.8520"),
+                net_profit=Decimal("-24.63"),
+                attributed_sales_cny=Decimal("36.06"),
+                platform_fee_cny=Decimal("8.55"),
+                ad_spend_cny=Decimal("42.33"),
+                sku_and_other_cost_cny=Decimal("9.81"),
+                break_even_target=BreakEvenTarget(
+                    break_even_roas=Decimal("2.04"),
+                    break_even_gmv=Decimal("428.03"),
+                    average_order_value=Decimal("89.50"),
+                    break_even_orders=5,
+                    gmv_gap=Decimal("249.03"),
+                    order_gap=3,
+                    confidence="reconciliation_pending",
+                    explanation="广告归因 2 单，当前匹配 1 个实际成本订单",
+                ),
+            ),
+        ),
+        sku_performance=(),
+        alerts=(),
+        recommendations=(),
+        capabilities={
+            "platform_metrics": "ready",
+            "estimated_profit": "ready",
+            "verified_profit": "ready",
+            "inventory_safe_strategy": "pending_data",
+        },
+    )
+
+    report = render_daily_markdown(snapshot, simulated=False)
+
+    assert "## 二、保本目标" in report
+    assert "Shopee 当前 ROAS：0.85" in report
+    assert "Shopee 经营保本 ROAS：2.04" in report
+    assert "当前花费下保本 GMV：THB 428.03" in report
+    assert "当前客单价：THB 89.50" in report
+    assert "估算保本单量：约 5 单" in report
+    assert "距离保本：还差 THB 249.03 / 约 3 单" in report
+    assert "数据可信度：待对账" in report
+    assert "广告归因 2 单，当前匹配 1 个实际成本订单" in report
+    assert "## 三、平台表现" in report
+    assert "## 六、数据可信度" in report
+
+
+def test_daily_report_marks_unavailable_break_even_without_fake_numbers(
+    tmp_path,
+):
+    data_date = date(2026, 7, 23)
+    database = Database(tmp_path / "test.sqlite3")
+    database.migrate()
+    PipelineRunner(database).run(MockCollector(Platform.SHOPEE), data_date)
+
+    report = render_daily_markdown(
+        ReportReadModel(database).daily(data_date), simulated=False
+    )
+
+    assert "## 二、保本目标" in report
+    assert "Shopee：暂不可计算" in report

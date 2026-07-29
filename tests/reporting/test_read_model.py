@@ -1,4 +1,5 @@
 from datetime import date
+from decimal import Decimal
 
 from adwatch.analytics.service import AnalysisService
 from adwatch.collectors.mock import MockCollector
@@ -81,3 +82,79 @@ def test_daily_read_model_includes_platform_profit_breakdown(tmp_path):
         - platform.sku_and_other_cost_cny
         == platform.net_profit
     )
+
+
+def test_daily_read_model_includes_reconciliation_aware_break_even_target(
+    tmp_path,
+):
+    database = Database(tmp_path / "test.sqlite3")
+    database.migrate()
+    with database.transaction() as connection:
+        connection.execute(
+            """
+            INSERT INTO daily_ad_metrics(
+                platform, store, account_id, campaign_id, sku_id, data_date,
+                currency, spend, attributed_gmv, orders, roas, cpa, source
+            ) VALUES (
+                'shopee', '虾皮泰国', 'account', 'Shop GMV Max', '__ALL__',
+                '2026-07-28', 'THB', '210.10', '179.00', 2,
+                '0.8520', '105.0500', 'ziniao-cli'
+            )
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO exchange_rates(currency, rate_date, rate_to_cny)
+            VALUES ('THB', '2026-07-28', '0.201468432624856')
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO profit_results(
+                platform, store, account_id, campaign_id, sku_id, data_date,
+                net_sales_cny, platform_commission_cny, gross_profit_cny,
+                net_profit_cny, break_even_roas
+            ) VALUES (
+                'shopee', '虾皮泰国', 'account', 'Shop GMV Max', '__ALL__',
+                '2026-07-28', '36.06', '8.55', '17.70', '-24.63', '1.71'
+            )
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO platform_order_lines(
+                platform, store, order_id, item_id, model_id, seller_sku,
+                variation_name, product_name, quantity, buyer_paid, currency,
+                order_status, logistics_status, refund_status, ordered_at,
+                source_updated_at
+            ) VALUES (
+                'shopee', 'no4kud44da', 'ORDER-1', 'ITEM-1', 'MODEL-1',
+                'SKU-1', '1 bag', 'Product', 1, '179', 'THB', 'completed',
+                'delivered', 'none', '2026-07-28', '2026-07-29'
+            )
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO order_cost_snapshots(
+                platform, store, order_id, seller_sku, quantity,
+                unit_cost_cny, total_cost_cny, cost_effective_date,
+                status, created_at
+            ) VALUES (
+                'shopee', 'no4kud44da', 'ORDER-1', 'SKU-1', 1,
+                '9.81', '9.81', '2026-07-28', 'confirmed', '2026-07-29'
+            )
+            """
+        )
+
+    platform = ReportReadModel(database).daily(
+        date(2026, 7, 28)
+    ).platforms[0]
+    target = platform.break_even_target
+
+    assert target is not None
+    assert target.break_even_roas == Decimal("2.04")
+    assert target.break_even_gmv == Decimal("428.03")
+    assert target.break_even_orders == 5
+    assert target.confidence == "reconciliation_pending"
+    assert target.explanation == "广告归因 2 单，当前匹配 1 个实际成本订单"

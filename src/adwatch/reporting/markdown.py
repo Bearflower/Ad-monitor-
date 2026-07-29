@@ -15,6 +15,15 @@ PLATFORM_LABELS = {
     "tiktok": "TikTok",
     "shopee": "Shopee",
 }
+CURRENCY_LABELS = {
+    "tiktok": "THB",
+    "shopee": "THB",
+}
+BREAK_EVEN_CONFIDENCE_LABELS = {
+    "verified": "已验证",
+    "reconciliation_pending": "待对账",
+    "missing_data": "待补数据",
+}
 CAPABILITY_LABELS = {
     "platform_metrics": "平台广告数据",
     "estimated_profit": "估算利润",
@@ -98,6 +107,38 @@ def _profit_lines(item: PlatformSummary) -> tuple[str, ...]:
     )
 
 
+def _break_even_lines(item: PlatformSummary) -> tuple[str, ...]:
+    label = PLATFORM_LABELS.get(item.platform, item.platform)
+    currency = CURRENCY_LABELS.get(item.platform, "平台原币")
+    target = item.break_even_target
+    if target is None or target.break_even_roas is None:
+        explanation = "" if target is None else f"（{target.explanation}）"
+        return (f"- {label}：暂不可计算{explanation}",)
+    if target.gmv_gap and target.gmv_gap > 0:
+        distance = (
+            f"还差 {currency} {target.gmv_gap:.2f} / "
+            f"约 {target.order_gap} 单"
+        )
+    else:
+        distance = "已达到经营保本线"
+    return (
+        f"- {label} 当前 ROAS：{item.roas:.2f}",
+        f"- {label} 经营保本 ROAS：{target.break_even_roas:.2f}",
+        (
+            f"- 当前花费下保本 GMV："
+            f"{currency} {target.break_even_gmv:.2f}"
+        ),
+        f"- 当前客单价：{currency} {target.average_order_value:.2f}",
+        f"- 估算保本单量：约 {target.break_even_orders} 单",
+        f"- 距离保本：{distance}",
+        (
+            f"- 数据可信度："
+            f"{BREAK_EVEN_CONFIDENCE_LABELS[target.confidence]}"
+        ),
+        f"- 说明：{target.explanation}",
+    )
+
+
 def _risk(snapshot: DailySnapshot) -> tuple[str, str, str]:
     if any(
         item.net_profit is not None and item.net_profit < 0
@@ -159,6 +200,9 @@ def present_daily_report(
     profit_lines = tuple(
         line for item in snapshot.platforms for line in _profit_lines(item)
     )
+    break_even_lines = tuple(
+        line for item in snapshot.platforms for line in _break_even_lines(item)
+    )
     capabilities = tuple(
         f"- {CAPABILITY_LABELS.get(name, name)}："
         f"{STATUS_LABELS.get(status, status)}"
@@ -173,17 +217,20 @@ def present_daily_report(
             "## 一、核心经营结果",
             *(profit_lines or ("- 暂无利润数据",)),
             "",
-            "## 二、平台表现",
+            "## 二、保本目标",
+            *(break_even_lines or ("- 暂无数据",)),
+            "",
+            "## 三、平台表现",
             f"- TikTok：{_platform_line(snapshot, 'tiktok')}",
             f"- Shopee：{_platform_line(snapshot, 'shopee')}",
             "",
-            "## 三、异常与风险",
+            "## 四、异常与风险",
             *_alert_lines(snapshot),
             "",
-            "## 四、建议动作",
+            "## 五、建议动作",
             *_recommendation_lines(snapshot),
             "",
-            "## 五、数据可信度",
+            "## 六、数据可信度",
             *capabilities,
         )
     )
