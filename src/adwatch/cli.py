@@ -44,6 +44,7 @@ from adwatch.execution.policy import (
 from adwatch.execution.ziniao_backend import ZiniaoExecutionBackend
 from adwatch.integrations.exchange_rates import (
     EcbExchangeRateSource,
+    ensure_exchange_rate,
     sync_exchange_rates,
 )
 from adwatch.operations.backup import create_backup, verify_backup
@@ -920,6 +921,24 @@ def main(argv: list[str] | None = None) -> int:
                 "ZINIAO_TIKTOK_STORE_ID and ZINIAO_SHOPEE_STORE_ID."
             )
             return 2
+        if args.mode == "ziniao":
+            try:
+                exchange_rate = ensure_exchange_rate(
+                    database,
+                    EcbExchangeRateSource(),
+                    currency="THB",
+                    data_date=args.date,
+                )
+                print(
+                    f"exchange_rate={exchange_rate.status} "
+                    f"THB/CNY={exchange_rate.rate} "
+                    f"source_date={exchange_rate.source_date.isoformat()}"
+                )
+            except (OSError, ValueError) as error:
+                print(
+                    "exchange_rate=unavailable "
+                    f"error={type(error).__name__}: {error}"
+                )
         collector_type = (
             MockCollector if args.mode == "mock" else ZiniaoCollector
         )

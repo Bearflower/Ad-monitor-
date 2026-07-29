@@ -21,6 +21,94 @@ def test_daily_run_creates_all_local_artifacts(tmp_path, monkeypatch):
     assert (tmp_path / "reports" / "daily-2026-07-22.md").exists()
 
 
+def test_daily_run_ensures_exchange_rate_before_analysis(
+    tmp_path, monkeypatch
+):
+    settings = Settings(
+        data_dir=tmp_path,
+        ziniao_tiktok_store_id="111",
+        ziniao_shopee_store_id="222",
+    )
+    monkeypatch.setattr(adwatch.cli.Settings, "from_env", lambda: settings)
+    monkeypatch.setattr(
+        adwatch.cli,
+        "ZiniaoCollector",
+        lambda settings, platform: type(
+            "EmptyCollector",
+            (),
+            {
+                "source": "ziniao",
+                "platform": platform,
+                "collect": lambda self, data_date: [],
+            },
+        )(),
+    )
+    calls = []
+    original_run = adwatch.cli.AnalysisService.run
+
+    def ensure_rate(*args, **kwargs):
+        calls.append("exchange_rate")
+        return type(
+            "Resolution",
+            (),
+            {
+                "status": "local_fallback",
+                "rate": Decimal("0.201"),
+                "source_date": date(2026, 7, 21),
+            },
+        )()
+
+    def analyze(self, data_date):
+        calls.append("analysis")
+        return original_run(self, data_date)
+
+    monkeypatch.setattr(
+        adwatch.cli, "ensure_exchange_rate", ensure_rate, raising=False
+    )
+    monkeypatch.setattr(adwatch.cli.AnalysisService, "run", analyze)
+
+    assert main(
+        ["run", "daily", "--mode", "ziniao", "--date", "2026-07-22"]
+    ) == 0
+    assert calls[:2] == ["exchange_rate", "analysis"]
+
+
+def test_daily_run_continues_when_exchange_rate_is_unavailable(
+    tmp_path, monkeypatch, capsys
+):
+    settings = Settings(
+        data_dir=tmp_path,
+        ziniao_tiktok_store_id="111",
+        ziniao_shopee_store_id="222",
+    )
+    monkeypatch.setattr(adwatch.cli.Settings, "from_env", lambda: settings)
+    monkeypatch.setattr(
+        adwatch.cli,
+        "ZiniaoCollector",
+        lambda settings, platform: type(
+            "EmptyCollector",
+            (),
+            {
+                "source": "ziniao",
+                "platform": platform,
+                "collect": lambda self, data_date: [],
+            },
+        )(),
+    )
+
+    def unavailable(*args, **kwargs):
+        raise ValueError("latest THB/CNY exchange rate is older than 7 days")
+
+    monkeypatch.setattr(
+        adwatch.cli, "ensure_exchange_rate", unavailable, raising=False
+    )
+
+    assert main(
+        ["run", "daily", "--mode", "ziniao", "--date", "2026-07-22"]
+    ) == 0
+    assert "exchange_rate=unavailable" in capsys.readouterr().out
+
+
 def test_daily_run_syncs_existing_platform_orders_before_analysis(
     tmp_path, monkeypatch
 ):
