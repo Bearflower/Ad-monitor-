@@ -20,6 +20,15 @@ class ExchangeRateRangeSource(Protocol):
 
 
 @dataclass(frozen=True)
+class ExchangeRateResolution:
+    currency: str
+    data_date: date
+    rate: Decimal
+    status: str
+    source_date: date
+
+
+@dataclass(frozen=True)
 class StaticExchangeRateSource:
     values: dict[tuple[str, date], Decimal]
 
@@ -102,3 +111,70 @@ def sync_exchange_rates(
                 (currency.upper(), rate_date.isoformat(), str(rate)),
             )
     return len(rates)
+
+
+def ensure_exchange_rate(
+    database: Database,
+    source: ExchangeRateRangeSource,
+    *,
+    currency: str,
+    data_date: date,
+    max_staleness_days: int = 7,
+) -> ExchangeRateResolution:
+    currency = currency.strip().upper()
+    try:
+        rates = source.fetch_range(currency, data_date, data_date)
+    except (OSError, ValueError):
+        rates = {}
+    if data_date in rates:
+        rate = rates[data_date]
+        with database.transaction() as connection:
+            connection.execute(
+                """
+                INSERT INTO exchange_rates(currency, rate_date, rate_to_cny)
+                VALUES (?, ?, ?)
+                ON CONFLICT(currency, rate_date) DO UPDATE SET
+                    rate_to_cny=excluded.rate_to_cny
+                """,
+                (currency, data_date.isoformat(), str(rate)),
+            )
+        return ExchangeRateResolution(
+            currency, data_date, rate, "fresh", data_date
+        )
+
+    with database.connect() as connection:
+        row = connection.execute(
+            """
+            SELECT rate_date, rate_to_cny
+            FROM exchange_rates
+            WHERE currency=? AND rate_date<=?
+            ORDER BY rate_date DESC
+            LIMIT 1
+            """,
+            (currency, data_date.isoformat()),
+        ).fetchone()
+    if row is None:
+        raise ValueError(
+            f"no {currency}/CNY exchange rate on or before {data_date}"
+        )
+    source_date = date.fromisoformat(row["rate_date"])
+    age = (data_date - source_date).days
+    if age > max_staleness_days:
+        raise ValueError(
+            f"latest {currency}/CNY exchange rate is older than "
+            f"{max_staleness_days} days"
+        )
+    rate = Decimal(row["rate_to_cny"])
+    with database.transaction() as connection:
+        connection.execute(
+            """
+            INSERT INTO exchange_rates(currency, rate_date, rate_to_cny)
+            VALUES (?, ?, ?)
+            ON CONFLICT(currency, rate_date) DO UPDATE SET
+                rate_to_cny=excluded.rate_to_cny
+            """,
+            (currency, data_date.isoformat(), str(rate)),
+        )
+    return ExchangeRateResolution(
+        currency, data_date, rate, "local_fallback", source_date
+    )
