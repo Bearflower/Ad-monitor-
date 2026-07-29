@@ -217,7 +217,7 @@ def build_parser() -> argparse.ArgumentParser:
     dashboard = subcommands.add_parser("dashboard")
     dashboard.add_argument("--host", default="127.0.0.1")
     dashboard.add_argument("--port", type=int, default=8765)
-    dashboard.add_argument("--date", type=date.fromisoformat, default=local_today)
+    dashboard.add_argument("--date", type=date.fromisoformat)
     dashboard.add_argument("--allow-remote", action="store_true")
     reconcile = subcommands.add_parser("reconcile")
     reconcile_commands = reconcile.add_subparsers(dest="reconcile_command")
@@ -904,13 +904,18 @@ def main(argv: list[str] | None = None) -> int:
             print("Remote dashboard binding requires --allow-remote")
             return 2
         database.migrate()
+        dashboard_date = (
+            args.date
+            or ReportReadModel(database).latest_data_date()
+            or datetime.now().astimezone().date()
+        )
         print(f"Dashboard: http://{args.host}:{args.port}")
         serve(
             database,
             host=args.host,
             port=args.port,
-            default_date=args.date,
-            simulated=True,
+            default_date=dashboard_date,
+            simulated=None,
         )
         return 0
     if args.command == "run" and args.workflow == "daily":

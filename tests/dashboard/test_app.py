@@ -67,3 +67,19 @@ def test_dashboard_renders_trends_quality_and_execution(tmp_path):
     assert "30 天趋势" in page
     assert "采集运行质量" in page
     assert "审批与执行状态" in page
+
+
+def test_real_dashboard_formats_net_profit_as_cny(tmp_path):
+    data_date = date(2026, 7, 22)
+    database = Database(tmp_path / "test.sqlite3")
+    database.migrate()
+    PipelineRunner(database).run(MockCollector(Platform.SHOPEE), data_date)
+    service = AnalysisService(database)
+    service.seed_mock_business_data(data_date)
+    service.run(data_date)
+
+    page = render_dashboard(database, data_date, simulated=False)
+
+    assert "真实数据" in page
+    assert "<dt>净利润</dt><dd>" in page
+    assert "¥" in page

@@ -28,6 +28,13 @@ def _format_decimal(value: Decimal | None, places: int = 2) -> str:
     return "N/A" if value is None else f"{value:.{places}f}"
 
 
+def _format_cny(value: Decimal | None) -> str:
+    if value is None:
+        return "待补数据"
+    sign = "-" if value < 0 else ""
+    return f"{sign}¥{abs(value):.2f}"
+
+
 def render_dashboard(
     database: Database,
     data_date: date,
@@ -62,7 +69,7 @@ def render_dashboard(
             <div><dt>消耗</dt><dd>{_format_decimal(item.spend)}</dd></div>
             <div><dt>GMV</dt><dd>{_format_decimal(item.gmv)}</dd></div>
             <div><dt>订单</dt><dd>{item.orders}</dd></div>
-            <div><dt>净利润</dt><dd>{_format_decimal(item.net_profit)}</dd></div>
+            <div><dt>净利润</dt><dd>{_format_cny(item.net_profit)}</dd></div>
           </dl>
         </article>
         """
@@ -76,7 +83,7 @@ def render_dashboard(
           <td>{html.escape(item.campaign_id)}</td>
           <td>{html.escape(item.sku_id)}</td>
           <td class="number">{_format_decimal(item.roas)}</td>
-          <td class="number">{_format_decimal(item.net_profit)}</td>
+          <td class="number">{_format_cny(item.net_profit)}</td>
         </tr>
         """
         for item in sku_items
@@ -245,7 +252,7 @@ def serve(
     host: str,
     port: int,
     default_date: date,
-    simulated: bool,
+    simulated: bool | None,
 ) -> None:
     csrf_token = secrets.token_urlsafe(32)
     router = DashboardRouter(
@@ -294,10 +301,15 @@ def serve(
                 body = snapshot_json(ReportReadModel(database).daily(data_date))
                 content_type = "application/json; charset=utf-8"
             elif parsed.path == "/":
+                effective_simulated = (
+                    ReportReadModel(database).is_simulated(data_date)
+                    if simulated is None
+                    else simulated
+                )
                 body = render_dashboard(
                     database,
                     data_date,
-                    simulated=simulated,
+                    simulated=effective_simulated,
                     platform=parse_qs(parsed.query).get("platform", [""])[0],
                     store=parse_qs(parsed.query).get("store", [""])[0],
                     campaign=parse_qs(parsed.query).get("campaign", [""])[0],

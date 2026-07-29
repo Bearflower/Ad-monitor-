@@ -64,6 +64,32 @@ class ReportReadModel:
     def __init__(self, database: Database) -> None:
         self.database = database
 
+    def latest_data_date(self) -> date | None:
+        with self.database.connect() as connection:
+            row = connection.execute(
+                "SELECT MAX(data_date) AS data_date FROM daily_ad_metrics"
+            ).fetchone()
+        return (
+            None
+            if row is None or row["data_date"] is None
+            else date.fromisoformat(row["data_date"])
+        )
+
+    def is_simulated(self, data_date: date) -> bool:
+        with self.database.connect() as connection:
+            row = connection.execute(
+                """
+                SELECT COUNT(*) AS metric_count,
+                       SUM(CASE WHEN source='mock' THEN 1 ELSE 0 END)
+                           AS mock_count
+                FROM daily_ad_metrics
+                WHERE data_date=?
+                """,
+                (data_date.isoformat(),),
+            ).fetchone()
+        metric_count = int(row["metric_count"] or 0)
+        return metric_count > 0 and int(row["mock_count"] or 0) == metric_count
+
     def daily(self, data_date: date) -> DailySnapshot:
         day = data_date.isoformat()
         with self.database.connect() as connection:

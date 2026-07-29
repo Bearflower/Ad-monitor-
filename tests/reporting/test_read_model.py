@@ -158,3 +158,32 @@ def test_daily_read_model_includes_reconciliation_aware_break_even_target(
     assert target.break_even_orders == 5
     assert target.confidence == "reconciliation_pending"
     assert target.explanation == "广告归因 2 单，当前匹配 1 个实际成本订单"
+
+
+def test_read_model_finds_latest_date_and_detects_real_source(tmp_path):
+    database = Database(tmp_path / "test.sqlite3")
+    database.migrate()
+    with database.transaction() as connection:
+        for data_date, source in (
+            ("2026-07-27", "mock"),
+            ("2026-07-28", "ziniao-cli"),
+        ):
+            connection.execute(
+                """
+                INSERT INTO daily_ad_metrics(
+                    platform, store, account_id, campaign_id, sku_id,
+                    data_date, currency, spend, attributed_gmv, orders,
+                    source
+                ) VALUES (
+                    'shopee', 'shop', 'account', 'campaign', '__ALL__',
+                    ?, 'THB', '10', '20', 1, ?
+                )
+                """,
+                (data_date, source),
+            )
+
+    read_model = ReportReadModel(database)
+
+    assert read_model.latest_data_date() == date(2026, 7, 28)
+    assert read_model.is_simulated(date(2026, 7, 27)) is True
+    assert read_model.is_simulated(date(2026, 7, 28)) is False
