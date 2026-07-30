@@ -64,7 +64,11 @@ def test_schedule_plist_uses_real_mode_and_project_runtime(capsys):
     assert "<key>WorkingDirectory</key>" in output
     assert "/.venv/bin/adwatch</string>" in output
     assert "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin" in output
-    assert "<key>Hour</key><integer>8</integer>" in output
+    assert "<key>Hour</key><integer>9</integer>" in output
+    assert (
+        "<key>LimitLoadToSessionType</key><string>Aqua</string>"
+        in output
+    )
 
 
 def test_backup_cli_creates_verified_snapshot(tmp_path, monkeypatch, capsys):
