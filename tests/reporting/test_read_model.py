@@ -202,3 +202,67 @@ def test_read_model_finds_latest_date_and_detects_real_source(tmp_path):
     assert read_model.latest_data_date() == date(2026, 7, 28)
     assert read_model.is_simulated(date(2026, 7, 27)) is True
     assert read_model.is_simulated(date(2026, 7, 28)) is False
+
+
+def test_daily_read_model_marks_supplier_fulfilled_inventory_not_applicable(
+    tmp_path,
+):
+    database = Database(tmp_path / "test.sqlite3")
+    database.migrate()
+    with database.transaction() as connection:
+        connection.execute(
+            """
+            INSERT INTO daily_ad_metrics(
+                platform, store, account_id, campaign_id, sku_id, data_date,
+                currency, spend, attributed_gmv, orders, source
+            ) VALUES(
+                'shopee','shop','account','campaign','__ALL__',
+                '2026-07-29','THB','10','100',1,'ziniao-cli'
+            )
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO profit_results(
+                platform, store, account_id, campaign_id, sku_id, data_date,
+                net_sales_cny, platform_commission_cny, gross_profit_cny,
+                net_profit_cny, break_even_roas
+            ) VALUES(
+                'shopee','shop','account','campaign','__ALL__',
+                '2026-07-29','20','4','10','8','2'
+            )
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO platform_order_lines VALUES(
+                'shopee','shop','ORDER-1','item','model','SKU-1',
+                '1 bag','Product',1,'100','THB','pending','pending','',
+                '2026-07-29','2026-07-30T00:00:00Z'
+            )
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO order_fulfillment_snapshots VALUES(
+                'shopee','shop','ORDER-1','SKU-1','supplier_fulfilled',
+                '2026-07-01','available','sku_policy',
+                '2026-07-30T00:00:00Z'
+            )
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO order_cost_snapshots VALUES(
+                'shopee','shop','ORDER-1','SKU-1',1,'5','5',
+                '2026-07-01','confirmed','2026-07-30T00:00:00Z'
+            )
+            """
+        )
+
+    snapshot = ReportReadModel(database).daily(date(2026, 7, 29))
+
+    assert (
+        snapshot.capabilities["inventory_safe_strategy"]
+        == "not_applicable"
+    )

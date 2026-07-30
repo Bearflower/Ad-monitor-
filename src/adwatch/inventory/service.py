@@ -237,6 +237,26 @@ class InventoryService:
             )
         return True
 
+    def cancel_order_cost(
+        self,
+        *,
+        platform: str,
+        store: str,
+        order_id: str,
+        seller_sku: str,
+    ) -> bool:
+        with self.database.transaction() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE order_cost_snapshots
+                SET status='cancelled'
+                WHERE platform=? AND store=? AND order_id=? AND seller_sku=?
+                  AND status!='cancelled'
+                """,
+                (platform, store, order_id, seller_sku),
+            )
+        return cursor.rowcount > 0
+
     def damage(
         self,
         *,

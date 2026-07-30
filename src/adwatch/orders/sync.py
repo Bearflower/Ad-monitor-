@@ -54,6 +54,12 @@ class OperationsSyncService:
             logistics_status = row["logistics_status"].strip().lower()
             refund_status = row["refund_status"].strip().lower()
             if order_status in self._CANCELLED:
+                self.inventory.cancel_order_cost(
+                    platform=row["platform"],
+                    store=row["store"],
+                    order_id=row["order_id"],
+                    seller_sku=row["seller_sku"],
+                )
                 counts["cancelled"] += 1
                 continue
             ordered_on = date.fromisoformat(row["ordered_on"])
@@ -107,6 +113,31 @@ class OperationsSyncService:
                     counts["unchanged"] += 1
                 continue
             if (
+                fulfillment.mode == "supplier_fulfilled"
+            ):
+                cost = self._cost_for(
+                    row["platform"],
+                    row["store"],
+                    row["seller_sku"],
+                    row["ordered_on"],
+                )
+                if cost is None:
+                    counts["pending_cost"] += 1
+                    continue
+                changed = self.inventory.record_order_cost(
+                    platform=row["platform"],
+                    store=row["store"],
+                    order_id=row["order_id"],
+                    seller_sku=row["seller_sku"],
+                    quantity=int(row["quantity"]),
+                    unit_cost_cny=Decimal(cost["unit_cost_cny"]),
+                    cost_effective_date=date.fromisoformat(
+                        cost["effective_date"]
+                    ),
+                )
+                counts["supplier_costed" if changed else "unchanged"] += 1
+                continue
+            if (
                 order_status not in self._FULFILLED
                 and logistics_status not in self._FULFILLED
             ):
@@ -120,20 +151,6 @@ class OperationsSyncService:
             )
             if cost is None:
                 counts["pending_cost"] += 1
-                continue
-            if fulfillment.mode == "supplier_fulfilled":
-                changed = self.inventory.record_order_cost(
-                    platform=row["platform"],
-                    store=row["store"],
-                    order_id=row["order_id"],
-                    seller_sku=row["seller_sku"],
-                    quantity=int(row["quantity"]),
-                    unit_cost_cny=Decimal(cost["unit_cost_cny"]),
-                    cost_effective_date=date.fromisoformat(
-                        cost["effective_date"]
-                    ),
-                )
-                counts["supplier_costed" if changed else "unchanged"] += 1
                 continue
             try:
                 changed = self.inventory.ship_order(

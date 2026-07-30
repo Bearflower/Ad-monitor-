@@ -127,6 +127,26 @@ def test_daily_report_is_chinese_and_explains_risk_and_action():
     assert "TOP3/BOTTOM3" not in presentation.markdown
 
 
+def test_daily_report_labels_supplier_fulfilled_inventory_as_not_applicable():
+    snapshot = DailySnapshot(
+        data_date=date(2026, 7, 29),
+        platforms=(),
+        sku_performance=(),
+        alerts=(),
+        recommendations=(),
+        capabilities={
+            "platform_metrics": "ready",
+            "estimated_profit": "ready",
+            "verified_profit": "ready",
+            "inventory_safe_strategy": "not_applicable",
+        },
+    )
+
+    report = render_daily_markdown(snapshot, simulated=False)
+
+    assert "库存安全策略：不适用（货盘代发）" in report
+
+
 def test_daily_report_displays_break_even_target_and_reconciliation_status():
     snapshot = DailySnapshot(
         data_date=date(2026, 7, 28),

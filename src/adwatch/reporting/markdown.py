@@ -34,6 +34,7 @@ STATUS_LABELS = {
     "ready": "已就绪",
     "pending_data": "待补数据",
     "pending_external": "等待外部配置",
+    "not_applicable": "不适用（货盘代发）",
     "blocked": "已阻止",
     "proposed": "待审批",
     "approved": "已批准",

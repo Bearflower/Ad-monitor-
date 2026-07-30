@@ -216,6 +216,88 @@ def test_supplier_fulfilled_order_costs_without_inventory(tmp_path):
     assert movements == 0
 
 
+def test_supplier_fulfilled_pending_order_records_cost_at_order_time(tmp_path):
+    database = Database(tmp_path / "sync.sqlite3")
+    database.migrate()
+    _set_policy(database, "supplier_fulfilled")
+    orders = OrderRepository(database)
+    orders.set_sku_cost(
+        platform="shopee",
+        store="shop",
+        seller_sku="SKU-1",
+        effective_date=date(2026, 7, 1),
+        unit_cost_cny=Decimal(5),
+    )
+    orders.upsert_orders(
+        (
+            _order(
+                "SUPPLIER-PENDING",
+                order_status="pending",
+                logistics_status="pending",
+            ),
+        )
+    )
+
+    result = OperationsSyncService(database).sync()
+
+    assert result.supplier_costed == 1
+    assert result.pending_inventory == 0
+    with database.connect() as connection:
+        snapshot = connection.execute(
+            """
+            SELECT total_cost_cny, status FROM order_cost_snapshots
+            WHERE order_id='SUPPLIER-PENDING'
+            """
+        ).fetchone()
+    assert tuple(snapshot) == ("10", "confirmed")
+
+
+def test_supplier_fulfilled_cancelled_order_excludes_prior_cost(tmp_path):
+    database = Database(tmp_path / "sync.sqlite3")
+    database.migrate()
+    _set_policy(database, "supplier_fulfilled")
+    orders = OrderRepository(database)
+    orders.set_sku_cost(
+        platform="shopee",
+        store="shop",
+        seller_sku="SKU-1",
+        effective_date=date(2026, 7, 1),
+        unit_cost_cny=Decimal(5),
+    )
+    orders.upsert_orders(
+        (
+            _order(
+                "SUPPLIER-CANCELLED",
+                order_status="pending",
+                logistics_status="pending",
+            ),
+        )
+    )
+    service = OperationsSyncService(database)
+    service.sync()
+    orders.upsert_orders(
+        (
+            _order(
+                "SUPPLIER-CANCELLED",
+                order_status="cancelled",
+                logistics_status="cancelled",
+            ),
+        )
+    )
+
+    result = service.sync()
+
+    assert result.cancelled == 1
+    with database.connect() as connection:
+        status = connection.execute(
+            """
+            SELECT status FROM order_cost_snapshots
+            WHERE order_id='SUPPLIER-CANCELLED'
+            """
+        ).fetchone()[0]
+    assert status == "cancelled"
+
+
 def test_missing_fulfillment_policy_is_explicitly_pending(tmp_path):
     database = Database(tmp_path / "sync.sqlite3")
     database.migrate()

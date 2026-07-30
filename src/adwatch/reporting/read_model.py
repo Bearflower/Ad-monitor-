@@ -263,6 +263,45 @@ class ReportReadModel:
             )
             capability_row = connection.execute(
                 """
+                WITH order_dates AS (
+                    SELECT platform, store, order_id, seller_sku,
+                           MIN(substr(ordered_at, 1, 10)) AS order_date
+                    FROM platform_order_lines
+                    GROUP BY platform, store, order_id, seller_sku
+                ),
+                daily_inventory_requirements AS (
+                    SELECT
+                        snapshot.platform,
+                        COALESCE(alias.canonical_store, snapshot.store)
+                            AS canonical_store,
+                        order_dates.order_date,
+                        MAX(
+                            CASE
+                                WHEN COALESCE(
+                                    fulfillment.mode, 'stocked'
+                                )='stocked'
+                                THEN 1 ELSE 0
+                            END
+                        ) AS inventory_required
+                    FROM order_cost_snapshots AS snapshot
+                    LEFT JOIN order_fulfillment_snapshots AS fulfillment
+                      ON fulfillment.platform=snapshot.platform
+                     AND fulfillment.store=snapshot.store
+                     AND fulfillment.order_id=snapshot.order_id
+                     AND fulfillment.seller_sku=snapshot.seller_sku
+                    JOIN order_dates
+                      ON order_dates.platform=snapshot.platform
+                     AND order_dates.store=snapshot.store
+                     AND order_dates.order_id=snapshot.order_id
+                     AND order_dates.seller_sku=snapshot.seller_sku
+                    LEFT JOIN store_aliases AS alias
+                      ON alias.platform=snapshot.platform
+                     AND alias.source_store=snapshot.store
+                    WHERE snapshot.status='confirmed'
+                    GROUP BY
+                        snapshot.platform, canonical_store,
+                        order_dates.order_date
+                )
                 SELECT COUNT(m.id) metric_count,
                        COUNT(c.product_cost) cost_count,
                        COUNT(p.net_profit_cny) profit_count,
@@ -272,7 +311,13 @@ class ReportReadModel:
                               AND CAST(i.expected_daily_units AS REAL) > 0
                              THEN 1
                            END
-                       ) inventory_count
+                       ) inventory_count,
+                       COUNT(
+                           CASE
+                             WHEN requirements.inventory_required=0
+                             THEN 1
+                           END
+                       ) inventory_not_applicable_count
                 FROM daily_ad_metrics m
                 LEFT JOIN product_costs c
                   ON c.sku_id=m.sku_id AND c.effective_date=(
@@ -288,6 +333,10 @@ class ReportReadModel:
                  AND p.data_date=m.data_date
                 LEFT JOIN inventory_snapshots i
                   ON i.sku_id=m.sku_id AND i.snapshot_date=m.data_date
+                LEFT JOIN daily_inventory_requirements AS requirements
+                  ON requirements.platform=m.platform
+                 AND requirements.canonical_store=m.store
+                 AND requirements.order_date=m.data_date
                 WHERE m.data_date=?
                 """,
                 (day,),
@@ -301,6 +350,9 @@ class ReportReadModel:
             ) == metric_count
             inventory_ready = verified_ready and int(
                 capability_row["inventory_count"]
+            ) == metric_count
+            inventory_not_applicable = verified_ready and int(
+                capability_row["inventory_not_applicable_count"]
             ) == metric_count
         return DailySnapshot(
             data_date=data_date,
@@ -333,7 +385,11 @@ class ReportReadModel:
                     "ready" if verified_ready else "pending_data"
                 ),
                 "inventory_safe_strategy": (
-                    "ready" if inventory_ready else "pending_data"
+                    "not_applicable"
+                    if inventory_not_applicable
+                    else "ready"
+                    if inventory_ready
+                    else "pending_data"
                 ),
             },
         )
