@@ -2,6 +2,8 @@ import csv
 from datetime import date
 from decimal import Decimal
 
+from openpyxl import Workbook
+
 from adwatch.cli import main
 from adwatch.config import Settings
 from adwatch.domain import DailyAdMetric, Platform
@@ -134,6 +136,65 @@ def test_business_order_cost_commands(tmp_path, monkeypatch, capsys):
     output = capsys.readouterr().out
     assert "2026-07-23 shopee no4kud44da -> 虾皮泰国" in output
     assert "orders=1 units=1 total_cost_cny=5.00" in output
+
+
+def test_business_import_shopee_order_export_cli(
+    tmp_path, monkeypatch, capsys
+):
+    settings = _settings(tmp_path)
+    source = tmp_path / "Order.all.20260729_20260729.xlsx"
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.append(
+        [
+            "หมายเลขคำสั่งซื้อ",
+            "สถานะการสั่งซื้อ",
+            "สถานะการคืนเงินหรือคืนสินค้า",
+            "วันที่ทำการสั่งซื้อ",
+            "ชื่อสินค้า",
+            "เลขอ้างอิง SKU (SKU Reference No.)",
+            "ชื่อตัวเลือก",
+            "จำนวน",
+            "ราคาสินค้าที่ชำระโดยผู้ซื้อ (THB)",
+        ]
+    )
+    sheet.append(
+        [
+            "ORDER-1",
+            "ที่ต้องจัดส่ง",
+            "",
+            "2026-07-29 08:30",
+            "Product A",
+            "SKU-A",
+            "Red",
+            2,
+            100,
+        ]
+    )
+    workbook.save(source)
+    monkeypatch.setattr(Settings, "from_env", lambda: settings)
+
+    assert main(
+        [
+            "business",
+            "import-shopee-orders",
+            "--file",
+            str(source),
+            "--store",
+            "no4kud44da",
+        ]
+    ) == 0
+    assert (
+        "Imported Shopee orders: orders=1 skus=1 rejected=0"
+        in capsys.readouterr().out
+    )
+    database = Database(settings.database_path)
+    with database.connect() as connection:
+        row = connection.execute(
+            "SELECT order_id, seller_sku, quantity "
+            "FROM platform_order_lines"
+        ).fetchone()
+    assert tuple(row) == ("ORDER-1", "SKU-A", 2)
 
 
 def test_business_pending_sku_cost_commands(tmp_path, monkeypatch, capsys):

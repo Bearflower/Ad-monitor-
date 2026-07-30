@@ -25,3 +25,4 @@ def test_sku_upsert_is_idempotent_and_keeps_latest_inventory(tmp_path):
     assert len(pending) == 1
     assert pending[0]["inventory_units"] == 29
     assert pending[0]["seller_sku"] == "seller-sku"
+    assert pending[0]["first_seen_date"] == "2026-07-28"

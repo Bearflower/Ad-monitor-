@@ -55,6 +55,8 @@ from adwatch.operations.launch_checklist import (
 )
 from adwatch.operations.readiness import readiness_status
 from adwatch.orders.fulfillment import FulfillmentService
+from adwatch.orders.repository import OrderRepository
+from adwatch.orders.shopee_order_export import parse_order_export
 from adwatch.orders.sync import OperationsSyncService
 from adwatch.pipeline.runner import PipelineRunner
 from adwatch.reconciliation.service import ReconciliationService
@@ -153,6 +155,11 @@ def build_parser() -> argparse.ArgumentParser:
     import_minimal.add_argument("--file", type=Path, required=True)
     import_orders = business_commands.add_parser("import-orders")
     import_orders.add_argument("--file", type=Path, required=True)
+    import_shopee_orders = business_commands.add_parser(
+        "import-shopee-orders"
+    )
+    import_shopee_orders.add_argument("--file", type=Path, required=True)
+    import_shopee_orders.add_argument("--store", required=True)
     map_store_command = business_commands.add_parser("map-store")
     map_store_command.add_argument("--platform", required=True)
     map_store_command.add_argument("--source", required=True)
@@ -789,6 +796,23 @@ def main(argv: list[str] | None = None) -> int:
                     f"{summary.end.isoformat()} "
                     f"total_cost_cny={summary.total_cost_cny:.2f}"
                 )
+                return 0
+            if args.business_command == "import-shopee-orders":
+                parsed = parse_order_export(
+                    args.file,
+                    store=args.store,
+                    source_updated_at=datetime.now().astimezone(),
+                )
+                repository = OrderRepository(database)
+                sku_count = repository.upsert_skus(parsed.skus)
+                order_count = repository.upsert_orders(parsed.orders)
+                print(
+                    "Imported Shopee orders: "
+                    f"orders={order_count} skus={sku_count} "
+                    f"rejected={len(parsed.rejected)}"
+                )
+                for rejected in parsed.rejected:
+                    print(f"Rejected: {rejected}")
                 return 0
             if args.business_command == "map-store":
                 map_store(
