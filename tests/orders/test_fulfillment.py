@@ -89,3 +89,107 @@ def test_bulk_marker_uses_each_skus_earliest_cost_date(tmp_path):
         ("SKU-1", "2026-04-01", "supplier_fulfilled"),
         ("SKU-2", "2026-05-01", "supplier_fulfilled"),
     ]
+
+
+def test_resolve_for_order_accepts_canonical_store_alias(tmp_path):
+    database = Database(tmp_path / "fulfillment-alias.sqlite3")
+    database.migrate()
+    with database.transaction() as connection:
+        connection.execute(
+            """
+            INSERT INTO store_aliases(platform, source_store, canonical_store)
+            VALUES ('shopee', 'source-shop', 'canonical-shop')
+            """
+        )
+    service = FulfillmentService(database)
+    service.set_policy(
+        platform="shopee",
+        store="source-shop",
+        seller_sku="SKU-1",
+        effective_date=date(2026, 7, 1),
+        mode="supplier_fulfilled",
+        supply_status="available",
+    )
+
+    policy = service.resolve_for_order(
+        platform="shopee",
+        store="canonical-shop",
+        seller_sku="SKU-1",
+        ordered_on=date(2026, 7, 20),
+    )
+
+    assert policy is not None
+    assert tuple(policy) == (
+        "supplier_fulfilled",
+        "available",
+        "2026-07-01",
+    )
+
+
+def test_store_default_resolves_when_sku_policy_is_missing(tmp_path):
+    database = Database(tmp_path / "fulfillment-default.sqlite3")
+    database.migrate()
+    service = FulfillmentService(database)
+    service.set_store_default(
+        platform="shopee",
+        store="shop",
+        effective_date=date(2026, 7, 1),
+        mode="supplier_fulfilled",
+        supply_status="available",
+    )
+
+    snapshot = service.snapshot_order(
+        platform="shopee",
+        store="shop",
+        order_id="ORDER-DEFAULT",
+        seller_sku="SKU-1",
+        ordered_on=date(2026, 8, 1),
+    )
+
+    assert snapshot is not None
+    assert snapshot.mode == "supplier_fulfilled"
+    assert snapshot.resolution_source == "store_default"
+    policy = service.resolve_for_order(
+        platform="shopee",
+        store="shop",
+        seller_sku="SKU-1",
+        ordered_on=date(2026, 8, 1),
+    )
+    assert policy is not None
+    assert tuple(policy) == (
+        "supplier_fulfilled",
+        "available",
+        "2026-07-01",
+    )
+
+
+def test_store_default_resolves_through_store_alias(tmp_path):
+    database = Database(tmp_path / "fulfillment-default-alias.sqlite3")
+    database.migrate()
+    with database.transaction() as connection:
+        connection.execute(
+            """
+            INSERT INTO store_aliases(platform, source_store, canonical_store)
+            VALUES ('shopee', 'source-shop', 'canonical-shop')
+            """
+        )
+    service = FulfillmentService(database)
+    service.set_store_default(
+        platform="shopee",
+        store="canonical-shop",
+        effective_date=date(2026, 7, 1),
+        mode="supplier_fulfilled",
+        supply_status="available",
+    )
+
+    snapshot = service.snapshot_order(
+        platform="shopee",
+        store="source-shop",
+        order_id="ORDER-DEFAULT-ALIAS",
+        seller_sku="SKU-1",
+        ordered_on=date(2026, 8, 1),
+    )
+
+    assert snapshot is not None
+    assert snapshot.mode == "supplier_fulfilled"
+    assert snapshot.resolution_source == "store_default"

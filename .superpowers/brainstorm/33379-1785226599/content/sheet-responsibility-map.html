@@ -1,0 +1,73 @@
+<h2>原 Excel Sheet 在新系统中的去向</h2>
+<p class="subtitle">保留业务分工，改变数据来源；自动化不等于删除原有视图。</p>
+
+<div class="cards">
+  <div class="card">
+    <div class="card-body">
+      <div class="label">自动生成 · 保留视图</div>
+      <h3>收支总览 / 月度汇总</h3>
+      <p>继续承担总览与月结。由数据库计算，不再依赖人工维护的跨 Sheet 公式。</p>
+    </div>
+  </div>
+  <div class="card">
+    <div class="card-body">
+      <div class="label">CLI 自动 · 可查可补</div>
+      <h3>收入明细</h3>
+      <p>订单结算、退款、币种和来源由 CLI 获取；缺失或线下调整允许新增“调整记录”。</p>
+    </div>
+  </div>
+  <div class="card">
+    <div class="card-body">
+      <div class="label">CLI + SKU 成本</div>
+      <h3>出库产品</h3>
+      <p>订单、SKU、数量、物流由 CLI；单价复用 SKU 成本历史；每条订单保存成本快照。</p>
+    </div>
+  </div>
+  <div class="card">
+    <div class="card-body">
+      <div class="label">人工可写 · 核心保留</div>
+      <h3>进货成本</h3>
+      <p>采购、供应商、数量、币种、单价、物流和到货状态继续维护，并形成库存入库。</p>
+    </div>
+  </div>
+  <div class="card">
+    <div class="card-body">
+      <div class="label">人工可写 · 合并入口</div>
+      <h3>费用支出 + 前期投入</h3>
+      <p>放在同一资金流水页面，但通过“是否计利润、是否计出资”区分业务效果。</p>
+    </div>
+  </div>
+  <div class="card">
+    <div class="card-body">
+      <div class="label">人工可写 · 独立语义</div>
+      <h3>刷单成本</h3>
+      <p>保留独立视图；可关联订单/SKU，刷单收入从真实经营收入和广告转化中排除。</p>
+    </div>
+  </div>
+  <div class="card">
+    <div class="card-body">
+      <div class="label">CLI 优先 · 手工兜底</div>
+      <h3>广告充值 / 广告消耗</h3>
+      <p>广告消耗由 CLI；充值流水能取则自动，取不到仍可写。两者分别服务利润和现金。</p>
+    </div>
+  </div>
+  <div class="card">
+    <div class="card-body">
+      <div class="label">自动计算 · 人工确认</div>
+      <h3>合伙人分润</h3>
+      <p>期间与利润自动计算；实提金额、日期、状态和冲销可写。默认分成固定 60%/40%。</p>
+    </div>
+  </div>
+  <div class="card">
+    <div class="card-body">
+      <div class="label">自动优先 · 可覆盖</div>
+      <h3>汇率换算</h3>
+      <p>每日或每月汇率自动获取；允许登记人工汇率，并保存来源与生效期间。</p>
+    </div>
+  </div>
+</div>
+
+<div style="margin-top:20px;padding:15px;background:#fef3c7;border-radius:10px">
+  <strong>新增但不替代原 Sheet：</strong>
+  “待补 SKU 成本”是出库产品的成本主数据入口；不是另一套出库账。
+</div>

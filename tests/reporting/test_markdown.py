@@ -13,7 +13,10 @@ from adwatch.reporting.markdown import (
 )
 from adwatch.reporting.read_model import (
     DailySnapshot,
+    FeeRateSummary,
     PlatformSummary,
+    ProfitInputLineageView,
+    ProfitSourceSummary,
     ReportReadModel,
 )
 from adwatch.storage.db import Database
@@ -67,11 +70,10 @@ def test_monthly_report_aggregates_available_daily_snapshots(tmp_path):
     database = Database(tmp_path / "test.sqlite3")
     database.migrate()
     PipelineRunner(database).run(MockCollector(Platform.SHOPEE), data_date)
-    snapshot = ReportReadModel(database).daily(data_date)
 
-    report = render_monthly_markdown([snapshot], month="2026-07")
+    report = render_monthly_markdown(database, 2026, 7)
 
-    assert "# 广告月报 2026-07" in report
+    assert "# 广告月报｜2026年07月" in report
     assert "Shopee" in report
 
 
@@ -125,6 +127,159 @@ def test_daily_report_is_chinese_and_explains_risk_and_action():
     assert "库存安全策略：待补数据" in presentation.markdown
     assert "pending_data" not in presentation.markdown
     assert "TOP3/BOTTOM3" not in presentation.markdown
+
+
+def test_daily_report_displays_fee_rate_period_and_safe_source_name():
+    snapshot = DailySnapshot(
+        data_date=date(2026, 7, 27),
+        platforms=(),
+        sku_performance=(),
+        alerts=(),
+        recommendations=(),
+        capabilities={},
+        fee_rates=(
+            FeeRateSummary(
+                platform="shopee",
+                store="虾皮泰国",
+                effective_rate=Decimal("0.237201"),
+                period_start=date(2026, 7, 20),
+                period_end=date(2026, 7, 26),
+                selection="carried_forward",
+                source_name="weekly_report_20260720.pdf",
+                source_sha256="a" * 64,
+            ),
+        ),
+    )
+
+    report = render_daily_markdown(snapshot, simulated=False)
+
+    assert "## 七、平台费率来源" in report
+    assert "Shopee / 虾皮泰国：23.7201%" in report
+    assert "2026-07-20 至 2026-07-26" in report
+    assert "沿用最近周期" in report
+    assert "weekly_report_20260720.pdf" in report
+    assert "aaaaaaaa" not in report
+
+
+def test_daily_report_marks_fee_rate_as_pending_without_fake_zero():
+    snapshot = DailySnapshot(
+        data_date=date(2026, 7, 27),
+        platforms=(),
+        sku_performance=(),
+        alerts=(),
+        recommendations=(),
+        capabilities={},
+    )
+
+    report = render_daily_markdown(snapshot, simulated=False)
+
+    assert "平台费率：待补数据" in report
+    assert "0.0000%" not in report
+
+
+def test_daily_report_lists_store_source_freshness_and_missing_inputs():
+    snapshot = DailySnapshot(
+        data_date=date(2026, 7, 27),
+        platforms=(),
+        sku_performance=(),
+        alerts=(),
+        recommendations=(),
+        capabilities={
+            "platform_metrics": "ready",
+            "estimated_profit": "partial",
+            "verified_profit": "pending_data",
+            "inventory_safe_strategy": "pending_data",
+        },
+        profit_sources=(
+            ProfitSourceSummary(
+                platform="shopee",
+                store="虾皮泰国",
+                metric_rows=1,
+                attributed_orders=2,
+                platform_orders=3,
+                confirmed_cost_orders=2,
+                refund_observations=3,
+                refund_amount_observations=1,
+                inventory_snapshot_date=date(2026, 7, 26),
+                exchange_source_date=date(2026, 7, 26),
+                exchange_resolution_status="fallback_previous",
+                fee_period_start=date(2026, 7, 20),
+                fee_period_end=date(2026, 7, 26),
+                fee_selection="carried_forward",
+                profit_status="pending_data",
+                missing_inputs=("refunds", "product_cost"),
+            ),
+        ),
+        profit_input_lineage=(
+            ProfitInputLineageView(
+                platform="shopee",
+                store="虾皮泰国",
+                input_name="exchange_rate",
+                status="carried_forward",
+                source_type="exchange_rates",
+                source_date=date(2026, 7, 26),
+                age_days=1,
+                source_ref="fallback_previous",
+                detail_code="fallback_previous",
+                covered_rows=1,
+                total_rows=1,
+            ),
+        ),
+    )
+
+    report = render_daily_markdown(snapshot, simulated=False)
+
+    assert "## 八、数据来源与新鲜度" in report
+    assert "Shopee / 虾皮泰国：利润待补数据" in report
+    assert "广告指标 1 行 / 归因订单 2 单 / 平台订单 3 单" in report
+    assert "成本覆盖：2/3 个平台订单" in report
+    assert "退款金额观测：1/3 个退款观测" in report
+    assert "库存快照：2026-07-26" in report
+    assert "汇率来源：2026-07-26（fallback_previous）" in report
+    assert "结算费率周期：2026-07-20 至 2026-07-26（沿用最近周期）" in report
+    assert "关键缺口：退款金额、商品成本" in report
+    assert "汇率：沿用已有数据｜exchange_rates｜2026-07-26｜1/1 行" in report
+    assert "估算利润：部分就绪" in report
+    assert "ORDER-" not in report
+    assert "/Users/" not in report
+
+
+def test_daily_report_marks_one_store_pending_beside_ready_store():
+    snapshot = DailySnapshot(
+        data_date=date(2026, 7, 27),
+        platforms=(),
+        sku_performance=(),
+        alerts=(),
+        recommendations=(),
+        capabilities={},
+        fee_rates=(
+            FeeRateSummary(
+                platform="shopee",
+                store="Store A",
+                effective_rate=Decimal("0.2"),
+                period_start=date(2026, 7, 20),
+                period_end=date(2026, 7, 26),
+                selection="carried_forward",
+                source_name="weekly_report.pdf",
+                source_sha256="a" * 64,
+            ),
+            FeeRateSummary(
+                platform="shopee",
+                store="Store B",
+                effective_rate=None,
+                period_start=None,
+                period_end=None,
+                selection="pending_data",
+                source_name=None,
+                source_sha256=None,
+            ),
+        ),
+    )
+
+    report = render_daily_markdown(snapshot, simulated=False)
+
+    assert "Shopee / Store A：20.0000%" in report
+    assert "Shopee / Store B：待补数据" in report
 
 
 def test_daily_report_displays_break_even_target_and_reconciliation_status():

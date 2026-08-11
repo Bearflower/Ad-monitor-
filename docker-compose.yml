@@ -1,0 +1,19 @@
+version: "3.8"
+
+services:
+  adwatch:
+    build: .
+    image: adwatch:latest
+    container_name: adwatch
+    ports:
+      # 只监听 127.0.0.1，通过 nginx 反向代理对外暴露
+      - "127.0.0.1:8768:8768"
+    volumes:
+      - ./var:/app/var
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8768/')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
+from contextlib import nullcontext
 from datetime import date
 from decimal import Decimal
 
@@ -55,8 +56,11 @@ class AnalyticsRepository:
                     INSERT INTO product_costs(
                         sku_id, effective_date, product_cost, commission_rate,
                         seller_shipping, coupons, allocated_fixed_cost,
-                        refund_amount
-                    ) VALUES (?, ?, '20', '0.08', '2', '1', '1', '0')
+                        refund_amount, refund_data_status, input_source_name
+                    ) VALUES (
+                        ?, ?, '20', '0.08', '2', '1', '1', '0',
+                        'observed', 'mock'
+                    )
                     ON CONFLICT(sku_id, effective_date) DO NOTHING
                     """,
                     (row["sku_id"], data_date.isoformat()),
@@ -88,55 +92,184 @@ class AnalyticsRepository:
                 )
         return len(rows)
 
-    def load_analysis_rows(self, data_date: date) -> list[sqlite3.Row]:
-        with self.database.connect() as connection:
-            return connection.execute(
+    def load_analysis_rows(
+        self, data_date: date, *, connection=None
+    ) -> list[sqlite3.Row]:
+        db_context = (
+            nullcontext(connection)
+            if connection is not None
+            else self.database.connect()
+        )
+        with db_context as db_connection:
+            return db_connection.execute(
                 """
                 WITH metric_counts AS (
                     SELECT
                         platform, store, data_date,
-                        COUNT(*) AS metric_count
+                        COUNT(*) AS metric_count,
+                        COALESCE(
+                            SUM(CAST(attributed_gmv AS NUMERIC)), 0
+                        ) AS attributed_gmv_total
                     FROM daily_ad_metrics
                     GROUP BY platform, store, data_date
                 ),
-                legacy_order_costs AS (
+                metric_sku_scopes AS (
+                    SELECT sku_id,
+                           COUNT(DISTINCT platform || char(31) || store)
+                               AS scope_count
+                    FROM daily_ad_metrics
+                    GROUP BY sku_id
+                ),
+                order_line_scope AS (
                     SELECT
                         line.platform,
                         COALESCE(alias.canonical_store, line.store)
                             AS canonical_store,
+                        line.order_id,
+                        line.seller_sku,
+                        SUM(line.quantity) AS expected_quantity,
+                        MIN(substr(line.ordered_at, 1, 10)) AS order_date
+                    FROM effective_platform_order_lines AS line
+                    LEFT JOIN store_aliases AS alias
+                      ON alias.platform=line.platform
+                     AND alias.source_store=line.store
+                    WHERE line.resolution_status='ready'
+                      AND LOWER(TRIM(COALESCE(line.order_status, '')))
+                          NOT IN ('cancelled', 'canceled')
+                      AND LOWER(TRIM(COALESCE(line.refund_status, '')))
+                          NOT IN (
+                              'returned', 'refund_completed', 'refunded',
+                              'return_completed'
+                          )
+                    GROUP BY
+                        line.platform,
+                        COALESCE(alias.canonical_store, line.store),
+                        line.order_id, line.seller_sku
+                ),
+                expected_order_costs AS (
+                    SELECT platform, canonical_store, order_date,
+                           COUNT(*) AS expected_line_count
+                    FROM order_line_scope
+                    GROUP BY platform, canonical_store, order_date
+                ),
+                legacy_line_scope AS (
+                    SELECT
+                        line.platform,
+                        COALESCE(alias.canonical_store, line.store)
+                            AS canonical_store,
+                        line.order_id,
+                        line.sku_id AS seller_sku,
                         line.order_date,
-                        SUM(CAST(line.line_cost_cny AS NUMERIC))
-                            AS product_cost_cny,
-                        1 AS inventory_required
+                        line.line_cost_cny
                     FROM order_cost_lines AS line
                     LEFT JOIN store_aliases AS alias
                       ON alias.platform=line.platform
                      AND alias.source_store=line.store
+                ),
+                legacy_order_costs_raw AS (
+                    SELECT
+                        line.platform,
+                        line.canonical_store,
+                        line.order_date,
+                        SUM(CAST(line.line_cost_cny AS NUMERIC))
+                            AS product_cost_cny,
+                        1 AS inventory_required,
+                        line.order_date AS cost_source_date,
+                        'order_cost_lines' AS cost_source_type,
+                        COUNT(*) AS cost_line_count
+                    FROM legacy_line_scope AS line
                     GROUP BY
-                        line.platform, canonical_store, line.order_date
+                        line.platform, line.canonical_store, line.order_date
                 ),
-                order_dates AS (
-                    SELECT platform, store, order_id, seller_sku,
-                           MIN(substr(ordered_at, 1, 10)) AS order_date
-                    FROM platform_order_lines
-                    GROUP BY platform, store, order_id, seller_sku
+                legacy_order_costs AS (
+                    SELECT legacy.platform, legacy.canonical_store,
+                           legacy.order_date, legacy.product_cost_cny,
+                           legacy.inventory_required,
+                           legacy.cost_source_date,
+                           legacy.cost_source_type
+                    FROM legacy_order_costs_raw AS legacy
+                    LEFT JOIN expected_order_costs AS expected
+                      ON expected.platform=legacy.platform
+                     AND expected.canonical_store=legacy.canonical_store
+                     AND expected.order_date=legacy.order_date
+                    WHERE expected.expected_line_count IS NULL
+                       OR (
+                           NOT EXISTS (
+                               SELECT 1
+                               FROM order_line_scope AS expected_line
+                               WHERE expected_line.platform=legacy.platform
+                                 AND expected_line.canonical_store=
+                                     legacy.canonical_store
+                                 AND expected_line.order_date=
+                                     legacy.order_date
+                                 AND NOT EXISTS (
+                                     SELECT 1
+                                     FROM legacy_line_scope AS actual_line
+                                     WHERE actual_line.platform=
+                                           expected_line.platform
+                                       AND actual_line.canonical_store=
+                                           expected_line.canonical_store
+                                       AND actual_line.order_date=
+                                           expected_line.order_date
+                                       AND actual_line.order_id=
+                                           expected_line.order_id
+                                       AND actual_line.seller_sku=
+                                           expected_line.seller_sku
+                                 )
+                           )
+                           AND NOT EXISTS (
+                               SELECT 1
+                               FROM legacy_line_scope AS actual_line
+                               WHERE actual_line.platform=legacy.platform
+                                 AND actual_line.canonical_store=
+                                     legacy.canonical_store
+                                 AND actual_line.order_date=legacy.order_date
+                                 AND NOT EXISTS (
+                                     SELECT 1
+                                     FROM order_line_scope AS expected_line
+                                     WHERE expected_line.platform=
+                                           actual_line.platform
+                                       AND expected_line.canonical_store=
+                                           actual_line.canonical_store
+                                       AND expected_line.order_date=
+                                           actual_line.order_date
+                                       AND expected_line.order_id=
+                                           actual_line.order_id
+                                       AND expected_line.seller_sku=
+                                           actual_line.seller_sku
+                                 )
+                           )
+                       )
                 ),
-                snapshot_order_costs AS (
+                snapshot_line_costs AS (
                     SELECT
                         snapshot.platform,
-                        COALESCE(alias.canonical_store, snapshot.store)
+                        COALESCE(snapshot_alias.canonical_store, snapshot.store)
                             AS canonical_store,
+                        snapshot.order_id,
+                        snapshot.seller_sku,
                         COALESCE(
                             movement.occurred_on,
-                            order_dates.order_date
+                            order_scope.order_date
                         ) AS order_date,
-                        SUM(CAST(snapshot.total_cost_cny AS NUMERIC))
+                        CAST(snapshot.total_cost_cny AS NUMERIC)
                             AS product_cost_cny,
-                        MAX(
-                            CASE WHEN COALESCE(
-                                fulfillment.mode, 'stocked'
-                            )='stocked' THEN 1 ELSE 0 END
-                        ) AS inventory_required
+                        snapshot.quantity AS cost_quantity,
+                        CASE WHEN COALESCE(
+                            fulfillment.mode, 'stocked'
+                        )='stocked' THEN 1 ELSE 0 END AS inventory_required,
+                        snapshot.cost_effective_date AS cost_source_date,
+                        ROW_NUMBER() OVER (
+                            PARTITION BY
+                                snapshot.platform,
+                                COALESCE(
+                                    snapshot_alias.canonical_store,
+                                    snapshot.store
+                                ),
+                                snapshot.order_id,
+                                snapshot.seller_sku
+                            ORDER BY snapshot.created_at DESC, snapshot.store
+                        ) AS snapshot_rank
                     FROM order_cost_snapshots AS snapshot
                     LEFT JOIN order_fulfillment_snapshots AS fulfillment
                       ON fulfillment.platform=snapshot.platform
@@ -151,47 +284,154 @@ class AnalyticsRepository:
                          || snapshot.order_id
                      )
                      AND movement.seller_sku=snapshot.seller_sku
-                    LEFT JOIN order_dates
-                      ON order_dates.platform=snapshot.platform
-                     AND order_dates.store=snapshot.store
-                     AND order_dates.order_id=snapshot.order_id
-                     AND order_dates.seller_sku=snapshot.seller_sku
-                    LEFT JOIN store_aliases AS alias
-                      ON alias.platform=snapshot.platform
-                     AND alias.source_store=snapshot.store
+                    LEFT JOIN store_aliases AS snapshot_alias
+                      ON snapshot_alias.platform=snapshot.platform
+                     AND snapshot_alias.source_store=snapshot.store
+                    LEFT JOIN order_line_scope AS order_scope
+                      ON order_scope.platform=snapshot.platform
+                     AND order_scope.canonical_store=COALESCE(
+                         snapshot_alias.canonical_store, snapshot.store
+                     )
+                     AND order_scope.order_id=snapshot.order_id
+                     AND order_scope.seller_sku=snapshot.seller_sku
                     WHERE snapshot.status='confirmed'
                       AND (
                           movement.occurred_on IS NOT NULL
                           OR fulfillment.mode='supplier_fulfilled'
                       )
+                ),
+                snapshot_order_costs_raw AS (
+                    SELECT
+                        snapshot.platform,
+                        snapshot.canonical_store,
+                        snapshot.order_date,
+                        SUM(snapshot.product_cost_cny) AS product_cost_cny,
+                        MAX(snapshot.inventory_required) AS inventory_required,
+                        MAX(snapshot.cost_source_date) AS cost_source_date,
+                        'order_cost_snapshots' AS cost_source_type
+                    FROM snapshot_line_costs AS snapshot
+                    WHERE snapshot.snapshot_rank=1
                     GROUP BY
-                        snapshot.platform, canonical_store,
-                        order_date
+                        snapshot.platform,
+                        snapshot.canonical_store,
+                        snapshot.order_date
+                ),
+                snapshot_order_costs AS (
+                    SELECT snapshot.platform, snapshot.canonical_store,
+                           snapshot.order_date, snapshot.product_cost_cny,
+                           snapshot.inventory_required,
+                           snapshot.cost_source_date,
+                           snapshot.cost_source_type
+                    FROM snapshot_order_costs_raw AS snapshot
+                    LEFT JOIN expected_order_costs AS expected
+                      ON expected.platform=snapshot.platform
+                     AND expected.canonical_store=snapshot.canonical_store
+                     AND expected.order_date=snapshot.order_date
+                    WHERE expected.expected_line_count IS NULL
+                       OR NOT EXISTS (
+                           SELECT 1
+                           FROM order_line_scope AS expected_line
+                           WHERE expected_line.platform=snapshot.platform
+                             AND expected_line.canonical_store=
+                                 snapshot.canonical_store
+                             AND expected_line.order_date=snapshot.order_date
+                             AND NOT EXISTS (
+                                 SELECT 1
+                                 FROM snapshot_line_costs AS actual_line
+                                 WHERE actual_line.snapshot_rank=1
+                                   AND actual_line.platform=
+                                       expected_line.platform
+                                   AND actual_line.canonical_store=
+                                       expected_line.canonical_store
+                                   AND actual_line.order_id=
+                                       expected_line.order_id
+                                   AND actual_line.seller_sku=
+                                       expected_line.seller_sku
+                                   AND actual_line.cost_quantity>=
+                                       expected_line.expected_quantity
+                             )
+                       )
                 ),
                 daily_order_costs AS (
-                    SELECT * FROM legacy_order_costs
+                    SELECT * FROM snapshot_order_costs
                     UNION ALL
-                    SELECT snapshot.*
-                    FROM snapshot_order_costs AS snapshot
+                    SELECT legacy.*
+                    FROM legacy_order_costs AS legacy
                     WHERE NOT EXISTS (
-                        SELECT 1 FROM legacy_order_costs AS legacy
-                        WHERE legacy.platform=snapshot.platform
-                          AND legacy.canonical_store=
-                              snapshot.canonical_store
-                          AND legacy.order_date=snapshot.order_date
+                        SELECT 1 FROM snapshot_order_costs AS snapshot
+                        WHERE snapshot.platform=legacy.platform
+                          AND snapshot.canonical_store=
+                              legacy.canonical_store
+                          AND snapshot.order_date=legacy.order_date
                     )
                 )
                 SELECT
                     metric.*,
                     cost.product_cost,
-                    cost.commission_rate,
+                    cost.effective_date AS cost_effective_date,
+                    CASE
+                        WHEN refund_input.status IS NOT NULL
+                        THEN refund_input.status
+                        ELSE cost.refund_data_status
+                    END AS refund_data_status,
+                    cost.input_source_name,
+                    refund_input.source_type AS refund_source_type,
+                    refund_input.source_ref AS refund_source_ref,
+                    refund_input.data_date AS refund_source_date,
+                    cost.commission_rate AS legacy_commission_rate,
+                    CASE
+                        WHEN fee.effective_rate IS NOT NULL
+                        THEN fee.effective_rate
+                        WHEN metric_sku_scopes.scope_count = 1
+                        THEN cost.commission_rate
+                    END AS resolved_commission_rate,
+                    CASE
+                        WHEN fee.effective_rate IS NOT NULL
+                        THEN fee.effective_rate
+                        WHEN metric_sku_scopes.scope_count = 1
+                        THEN cost.commission_rate
+                    END AS commission_rate,
+                    fee.period_start AS fee_period_start,
+                    fee.period_end AS fee_period_end,
+                    CASE
+                        WHEN fee.id IS NOT NULL
+                         AND fee.period_end >= metric.data_date
+                        THEN 'covering_period'
+                        WHEN fee.id IS NOT NULL
+                        THEN 'carried_forward'
+                        WHEN cost.commission_rate IS NOT NULL
+                         AND metric_sku_scopes.scope_count = 1
+                        THEN 'legacy_cost_rate'
+                    END AS fee_selection,
+                    fee.source_name AS fee_source_name,
+                    fee.source_sha256 AS fee_source_sha256,
                     cost.seller_shipping,
                     cost.coupons,
                     cost.allocated_fixed_cost,
-                    cost.refund_amount,
+                    CASE
+                        WHEN refund_input.status IN ('observed', 't3_closed_zero')
+                        THEN CASE
+                             WHEN CAST(refund_input.refund_amount_original AS NUMERIC) = 0
+                             THEN 0
+                             ELSE CAST(refund_input.refund_amount_original AS NUMERIC)
+                             * CASE
+                                 WHEN metric_counts.attributed_gmv_total > 0
+                                 THEN CAST(metric.attributed_gmv AS REAL)
+                                      / CAST(metric_counts.attributed_gmv_total AS REAL)
+                                 WHEN metric_counts.metric_count > 0
+                                 THEN 1.0 / metric_counts.metric_count
+                                 ELSE 0
+                               END
+                           END
+                        WHEN refund_input.status IS NULL
+                         AND cost.refund_data_status='observed'
+                        THEN cost.refund_amount
+                    END AS refund_amount,
                     inventory.units AS inventory_units,
                     inventory.expected_daily_units,
                     rate.rate_to_cny,
+                    rate.source_date AS exchange_source_date,
+                    rate.resolution_status AS exchange_resolution_status,
                     campaign.start_date,
                     campaign.target_roas,
                     campaign.current_budget,
@@ -203,12 +443,19 @@ class AnalyticsRepository:
                              daily_order_costs.product_cost_cny AS TEXT
                          )
                     END AS order_product_cost_cny,
+                    daily_order_costs.cost_source_date,
+                    daily_order_costs.cost_source_type,
                     CASE
                         WHEN daily_order_costs.product_cost_cny IS NOT NULL
                          AND metric_counts.metric_count > 1
                         THEN 1 ELSE 0
                     END AS order_cost_allocation_ambiguous
                     ,
+                    CASE
+                        WHEN expected_order_costs.expected_line_count IS NOT NULL
+                         AND daily_order_costs.product_cost_cny IS NULL
+                        THEN 1 ELSE 0
+                    END AS order_cost_coverage_incomplete,
                     CASE
                         WHEN daily_order_costs.product_cost_cny IS NOT NULL
                         THEN daily_order_costs.inventory_required
@@ -222,6 +469,28 @@ class AnalyticsRepository:
                         FROM product_costs AS c2
                         WHERE c2.sku_id = metric.sku_id
                           AND c2.effective_date <= metric.data_date
+                    )
+                LEFT JOIN daily_refund_inputs AS refund_input
+                    ON refund_input.platform = metric.platform
+                    AND refund_input.store = metric.store
+                    AND refund_input.data_date = metric.data_date
+                LEFT JOIN platform_fee_statements AS fee
+                    ON fee.id = (
+                        SELECT candidate.id
+                        FROM platform_fee_statements AS candidate
+                        WHERE candidate.platform = metric.platform
+                          AND candidate.store = metric.store
+                          AND candidate.is_current = 1
+                          AND candidate.period_start <= ?
+                        ORDER BY
+                            CASE
+                                WHEN candidate.period_end >= ?
+                                THEN 0 ELSE 1
+                            END,
+                            candidate.period_start DESC,
+                            candidate.period_end DESC,
+                            candidate.version DESC
+                        LIMIT 1
                     )
                 LEFT JOIN inventory_snapshots AS inventory
                     ON inventory.sku_id = metric.sku_id
@@ -240,14 +509,20 @@ class AnalyticsRepository:
                     ON metric_counts.platform=metric.platform
                     AND metric_counts.store=metric.store
                     AND metric_counts.data_date=metric.data_date
+                LEFT JOIN metric_sku_scopes
+                    ON metric_sku_scopes.sku_id=metric.sku_id
                 LEFT JOIN daily_order_costs
                     ON daily_order_costs.platform=metric.platform
                     AND daily_order_costs.canonical_store=metric.store
                     AND daily_order_costs.order_date=metric.data_date
+                LEFT JOIN expected_order_costs
+                    ON expected_order_costs.platform=metric.platform
+                    AND expected_order_costs.canonical_store=metric.store
+                    AND expected_order_costs.order_date=metric.data_date
                 WHERE metric.data_date = ?
                 ORDER BY metric.platform, metric.campaign_id, metric.sku_id
                 """,
-                (data_date.isoformat(),),
+                (data_date.isoformat(),) * 3,
             ).fetchall()
 
     def baseline_for(self, row: sqlite3.Row, data_date: date) -> sqlite3.Row | None:

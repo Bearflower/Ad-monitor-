@@ -39,3 +39,14 @@ def test_launch_checklist_keeps_only_unresolved_external_items():
     assert "ziniao_bridge" not in {item.code for item in items}
     assert "feishu_callback" not in {item.code for item in items}
     assert "business_costs" in {item.code for item in items}
+
+
+def test_launch_checklist_excludes_disabled_platform_items():
+    items = build_launch_checklist(
+        LaunchReadiness(),
+        excluded_codes=frozenset({"tiktok_campaign_validation"}),
+    )
+
+    item_codes = {item.code for item in items}
+    assert "tiktok_campaign_validation" not in item_codes
+    assert "shopee_campaign_validation" in item_codes

@@ -30,7 +30,117 @@ class ZiniaoCliClient:
 
     def get_store_list(self) -> list[dict]:
         response = self._run("store", "list", "--format", "json")
-        return list(response.get("data", []))
+        data = response.get("data", {})
+        if isinstance(data, dict):
+            return list(data.get("items", []))
+        return list(data)
+
+    def page_content(
+        self,
+        store_id: str,
+        *,
+        url: str | None = None,
+        content_format: str = "structured",
+    ) -> dict[str, object]:
+        if url:
+            target = json.dumps(url)
+            self.page_exec(store_id, f'location.href={target}; "navigating"')
+            # 用文章ID做URL匹配，应对SPA中动态路径段（如 /portal/4/article/xxx）
+            article_id = ""
+            for part in url.split("/"):
+                if part.isdigit() and len(part) >= 4:
+                    article_id = part
+                    break
+            for attempt in range(15):
+                current_url = str(self.page_exec(store_id, "location.href"))
+                if article_id:
+                    if article_id in current_url:
+                        break
+                elif current_url.startswith(url):
+                    break
+                if attempt + 1 < 15:
+                    self.sleeper(1)
+            else:
+                raise ZiniaoApiError(
+                    f"Page did not reach expected URL after 15 attempts: {url}"
+                )
+        arguments = [
+            "page",
+            "content",
+            "--store-id",
+            store_id,
+            "--content-format",
+            content_format,
+        ]
+        page: object = {}
+        for attempt in range(10):
+            response = self._run(*arguments)
+            data = response.get("data", {})
+            page = data.get("data", data) if isinstance(data, dict) else data
+            content = page.get("content", {}) if isinstance(page, dict) else {}
+            if isinstance(content, dict) and (
+                content.get("text") or content.get("links")
+            ):
+                break
+            if attempt + 1 < 10:
+                self.sleeper(1)
+        data = response.get("data", {})
+        if not isinstance(data, dict):
+            return {"content": data}
+        if not isinstance(page, dict):
+            return {"content": page}
+        content = page.get("content", {})
+        if not isinstance(content, dict):
+            content = {"text": content}
+        links = content.get("links", [])
+        dom_script = """
+            JSON.stringify({
+              url: location.href,
+              title: document.title,
+              text: (document.body.innerText || '').trim(),
+              headings: Array.from(document.querySelectorAll('h1,h2,h3'))
+                .map(x => (x.innerText || x.textContent || '').trim())
+                .filter(Boolean),
+              links: Array.from(document.querySelectorAll('a[href]'))
+                .map(a => ({href: a.href, text:
+                  (a.innerText || a.textContent || '').trim()}))
+            })
+            """
+        dom = self.page_exec(store_id, dom_script)
+        if url and "/edu/home" in url:
+            for attempt in range(9):
+                dom_links = dom.get("links", []) if isinstance(dom, dict) else []
+                if len(dom_links) >= 20:
+                    break
+                self.sleeper(1)
+                dom = self.page_exec(store_id, dom_script)
+        elif url and ("/edu/article/" in url or "/portal/article/" in url):
+            for attempt in range(9):
+                dom_text = str(dom.get("text", "")) if isinstance(dom, dict) else ""
+                if len(dom_text) > 700 and "window.HTML_LOADED" not in dom_text:
+                    break
+                self.sleeper(1)
+                dom = self.page_exec(store_id, dom_script)
+        if isinstance(dom, dict):
+            page = {**page, **{k: v for k, v in dom.items() if v}}
+            if dom.get("text"):
+                content["text"] = dom["text"]
+            if dom.get("headings"):
+                content["headings"] = dom["headings"]
+            if dom.get("links"):
+                links = dom["links"]
+        return {
+            "url": page.get("url", url or ""),
+            "title": page.get("title", ""),
+            "language": page.get("language", "unknown"),
+            "paragraphs": [str(content.get("text", ""))],
+            "headings": content.get("headings", []),
+            "links": [
+                str(link.get("href"))
+                for link in links
+                if isinstance(link, dict) and link.get("href")
+            ],
+        }
 
     def page_exec(self, store_id: str, script: str) -> object:
         response = self._run(

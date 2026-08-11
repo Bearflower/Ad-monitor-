@@ -97,7 +97,7 @@ Expected: 204 tests pass and Ruff reports no errors.
 - [ ] **Step 6: Commit**
 
 ```bash
-git add README.md docs/superpowers/plans/2026-07-28-readme-project-overview.md
+git add README.md docs/plans/2026-07-28-readme-project-overview.md
 git commit -m "docs: rewrite README as project overview"
 ```
 

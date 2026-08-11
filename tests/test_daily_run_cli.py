@@ -4,21 +4,88 @@ from decimal import Decimal
 import adwatch.cli
 from adwatch.cli import main
 from adwatch.config import Settings
-from adwatch.domain import DailyAdMetric
+from adwatch.domain import DailyAdMetric, Platform
 from adwatch.inventory.models import PurchaseLine
 from adwatch.inventory.service import InventoryService
+from adwatch.operations import daily_run
 from adwatch.orders.fulfillment import FulfillmentService
 from adwatch.orders.models import PlatformOrderLine
 from adwatch.orders.repository import OrderRepository
 from adwatch.storage.db import Database
 
 
+def _patch_ready_bridge_and_knowledge(monkeypatch):
+    class ReadyBridge:
+        def get_store_list(self):
+            return []
+
+    monkeypatch.setattr(daily_run, "ZiniaoCliClient", ReadyBridge)
+    monkeypatch.setattr(
+        daily_run.ProductionDailyRunDependencies,
+        "update_knowledge",
+        lambda self, mode: None,
+    )
+    monkeypatch.setattr(
+        daily_run.ProductionDailyRunDependencies,
+        "sync_orders",
+        lambda self, report_date, mode: None,
+    )
+
+
+def _patch_execution_day_rate(monkeypatch):
+    def resolve_rate(*args, **kwargs):
+        return type(
+            "Resolution",
+            (),
+            {
+                "status": "execution_day",
+                "rate": Decimal("0.201"),
+                "source_date": date(2026, 7, 30),
+            },
+        )()
+
+    monkeypatch.setattr(
+        daily_run,
+        "resolve_scheduled_exchange_rate",
+        resolve_rate,
+    )
+
+
 def test_daily_run_creates_all_local_artifacts(tmp_path, monkeypatch):
     monkeypatch.setenv("ADWATCH_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("FEISHU_WEBHOOK", "")
     assert main(["run", "daily", "--mode", "mock", "--date", "2026-07-22"]) == 0
     assert (tmp_path / "adwatch.sqlite3").exists()
     assert (tmp_path / "reports" / "quality-2026-07-22.json").exists()
     assert (tmp_path / "reports" / "daily-2026-07-22.md").exists()
+
+
+def test_daily_run_no_notify_still_creates_local_report(
+    tmp_path, monkeypatch, capsys
+):
+    settings = Settings(
+        data_dir=tmp_path,
+        feishu_webhook="https://example.test/hook/secret",
+    )
+    monkeypatch.setattr(adwatch.cli.Settings, "from_env", lambda: settings)
+
+    assert (
+        main(
+            [
+                "run",
+                "daily",
+                "--mode",
+                "mock",
+                "--date",
+                "2026-07-22",
+                "--no-notify",
+            ]
+        )
+        == 0
+    )
+
+    assert (tmp_path / "reports" / "daily-2026-07-22.md").exists()
+    assert "delivery=suppressed" in capsys.readouterr().out
 
 
 def test_daily_run_ensures_exchange_rate_before_analysis(
@@ -28,23 +95,36 @@ def test_daily_run_ensures_exchange_rate_before_analysis(
         data_dir=tmp_path,
         ziniao_tiktok_store_id="111",
         ziniao_shopee_store_id="222",
+        tiktok_collection_enabled=True,
     )
     monkeypatch.setattr(adwatch.cli.Settings, "from_env", lambda: settings)
+    _patch_ready_bridge_and_knowledge(monkeypatch)
+
+    class FakeCollectorRegistry:
+        def get_collector(self, platform):
+            return type(
+                "EmptyCollector",
+                (),
+                {
+                    "source": "ziniao",
+                    "platform": Platform(platform),
+                    "collect": lambda self, data_date: [],
+                },
+            )()
+
+        def report_success(self, platform):
+            pass
+
+        def report_failure(self, platform):
+            pass
+
     monkeypatch.setattr(
-        adwatch.cli,
-        "ZiniaoCollector",
-        lambda settings, platform: type(
-            "EmptyCollector",
-            (),
-            {
-                "source": "ziniao",
-                "platform": platform,
-                "collect": lambda self, data_date: [],
-            },
-        )(),
+        daily_run,
+        "CollectorRegistry",
+        lambda *args, **kwargs: FakeCollectorRegistry(),
     )
     calls = []
-    original_run = adwatch.cli.AnalysisService.run
+    original_run = daily_run.AnalysisService.run
 
     def ensure_rate(*args, **kwargs):
         calls.append("exchange_rate")
@@ -63,9 +143,9 @@ def test_daily_run_ensures_exchange_rate_before_analysis(
         return original_run(self, data_date)
 
     monkeypatch.setattr(
-        adwatch.cli, "ensure_exchange_rate", ensure_rate, raising=False
+        daily_run, "resolve_scheduled_exchange_rate", ensure_rate
     )
-    monkeypatch.setattr(adwatch.cli.AnalysisService, "run", analyze)
+    monkeypatch.setattr(daily_run.AnalysisService, "run", analyze)
 
     assert main(
         ["run", "daily", "--mode", "ziniao", "--date", "2026-07-22"]
@@ -82,31 +162,45 @@ def test_daily_run_continues_when_exchange_rate_is_unavailable(
         ziniao_shopee_store_id="222",
     )
     monkeypatch.setattr(adwatch.cli.Settings, "from_env", lambda: settings)
+    _patch_ready_bridge_and_knowledge(monkeypatch)
+
+    class FakeCollectorRegistry2:
+        def get_collector(self, platform):
+            return type(
+                "EmptyCollector",
+                (),
+                {
+                    "source": "ziniao",
+                    "platform": Platform(platform),
+                    "collect": lambda self, data_date: [],
+                },
+            )()
+
+        def report_success(self, platform):
+            pass
+
+        def report_failure(self, platform):
+            pass
+
     monkeypatch.setattr(
-        adwatch.cli,
-        "ZiniaoCollector",
-        lambda settings, platform: type(
-            "EmptyCollector",
-            (),
-            {
-                "source": "ziniao",
-                "platform": platform,
-                "collect": lambda self, data_date: [],
-            },
-        )(),
+        daily_run,
+        "CollectorRegistry",
+        lambda *args, **kwargs: FakeCollectorRegistry2(),
     )
 
     def unavailable(*args, **kwargs):
         raise ValueError("latest THB/CNY exchange rate is older than 7 days")
 
     monkeypatch.setattr(
-        adwatch.cli, "ensure_exchange_rate", unavailable, raising=False
+        daily_run, "resolve_scheduled_exchange_rate", unavailable
     )
 
     assert main(
         ["run", "daily", "--mode", "ziniao", "--date", "2026-07-22"]
-    ) == 0
-    assert "exchange_rate=unavailable" in capsys.readouterr().out
+    ) == 2
+    output = capsys.readouterr().out
+    assert "exchange_rate=unavailable" in output
+    assert "daily_run=partial" in output
 
 
 def test_daily_run_syncs_existing_platform_orders_before_analysis(
@@ -206,7 +300,23 @@ def test_daily_ziniao_run_uses_real_collectors_and_marks_real_report(
         ziniao_shopee_store_id="222",
     )
     monkeypatch.setattr(adwatch.cli.Settings, "from_env", lambda: settings)
-    monkeypatch.setattr(adwatch.cli, "ZiniaoCollector", RealCollector)
+    _patch_ready_bridge_and_knowledge(monkeypatch)
+    _patch_execution_day_rate(monkeypatch)
+    class FakeCollectorRegistry:
+        def get_collector(self, platform):
+            return RealCollector(None, Platform(platform))
+
+        def report_success(self, platform):
+            pass
+
+        def report_failure(self, platform):
+            pass
+
+    monkeypatch.setattr(
+        daily_run,
+        "CollectorRegistry",
+        lambda *args, **kwargs: FakeCollectorRegistry(),
+    )
 
     assert main(["run", "daily", "--mode", "ziniao", "--date", "2026-07-22"]) == 0
 
@@ -248,9 +358,27 @@ def test_daily_run_keeps_shopee_data_when_tiktok_collection_fails(
         data_dir=tmp_path,
         ziniao_tiktok_store_id="111",
         ziniao_shopee_store_id="222",
+        tiktok_collection_enabled=True,
     )
     monkeypatch.setattr(adwatch.cli.Settings, "from_env", lambda: settings)
-    monkeypatch.setattr(adwatch.cli, "ZiniaoCollector", PartiallyFailingCollector)
+    _patch_ready_bridge_and_knowledge(monkeypatch)
+    _patch_execution_day_rate(monkeypatch)
+
+    class FakeCollectorRegistry:
+        def get_collector(self, platform):
+            return PartiallyFailingCollector(None, Platform(platform))
+
+        def report_success(self, platform):
+            pass
+
+        def report_failure(self, platform):
+            pass
+
+    monkeypatch.setattr(
+        daily_run,
+        "CollectorRegistry",
+        lambda *args, **kwargs: FakeCollectorRegistry(),
+    )
 
     result = main(["run", "daily", "--mode", "ziniao", "--date", "2026-07-22"])
 

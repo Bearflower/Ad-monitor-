@@ -466,9 +466,9 @@ git commit -m "feat: add launch reconciliation gates"
 **Files:**
 - Modify: `README.md`
 - Modify: `.env.example`
-- Modify: `docs/blueprint-gap-audit-2026-07-27.md`
-- Modify: `task_plan.md`
-- Modify: `progress.md`
+- Modify: `docs/blueprint/blueprint-gap-audit-2026-07-27.md`
+- Modify: `docs/workflow/task_plan.md`
+- Modify: `docs/workflow/progress.md`
 - Test: `tests/test_cli_end_to_end.py`
 - Test: `tests/test_daily_run_cli.py`
 
@@ -508,7 +508,7 @@ Expected: 代码项完成；三日真实对账、现场选择器或 Live 白名�
 - [ ] **Step 4: 提交**
 
 ```bash
-git add README.md .env.example docs/blueprint-gap-audit-2026-07-27.md task_plan.md progress.md tests/test_cli_end_to_end.py tests/test_daily_run_cli.py
+git add README.md .env.example docs/blueprint/blueprint-gap-audit-2026-07-27.md task_plan.md progress.md tests/test_cli_end_to_end.py tests/test_daily_run_cli.py
 git commit -m "docs: complete unified operations launch workflow"
 ```
 

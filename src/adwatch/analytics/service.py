@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from contextlib import nullcontext
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
 from decimal import Decimal
@@ -24,6 +25,18 @@ class AnalysisSummary:
     capabilities: dict[str, str] = field(default_factory=dict)
 
 
+@dataclass(frozen=True)
+class InputLineage:
+    input_name: str
+    value_text: str | None
+    status: str
+    source_type: str
+    source_date: str | None
+    age_days: int | None
+    source_ref: str = ""
+    detail_code: str = ""
+
+
 class AnalysisService:
     def __init__(self, database: Database) -> None:
         self.database = database
@@ -32,14 +45,21 @@ class AnalysisService:
     def seed_mock_business_data(self, data_date: date) -> int:
         return self.repository.seed_mock_business_data(data_date)
 
-    def run(self, data_date: date) -> AnalysisSummary:
-        rows = self.repository.load_analysis_rows(data_date)
+    def run(self, data_date: date, *, _connection=None) -> AnalysisSummary:
         profit_count = 0
         alert_count = 0
         recommendation_count = 0
         pending_data_count = 0
         operational_alert_count = 0
-        with self.database.transaction() as connection:
+        transaction = (
+            self.database.transaction()
+            if _connection is None
+            else nullcontext(_connection)
+        )
+        with transaction as connection:
+            rows = self.repository.load_analysis_rows(
+                data_date, connection=connection
+            )
             connection.execute(
                 "DELETE FROM profit_results WHERE data_date=?",
                 (data_date.isoformat(),),
@@ -48,8 +68,18 @@ class AnalysisService:
                 "DELETE FROM alerts WHERE data_date=?",
                 (data_date.isoformat(),),
             )
+            connection.execute(
+                "DELETE FROM recommendations WHERE data_date=?",
+                (data_date.isoformat(),),
+            )
+            connection.execute(
+                "DELETE FROM profit_input_lineage WHERE data_date=?",
+                (data_date.isoformat(),),
+            )
             for row in rows:
                 inventory_required = bool(row["inventory_required"])
+                lineage = self._profit_input_lineage(row, data_date)
+                self._insert_lineage(connection, row, lineage)
                 baseline = self.repository.baseline_for(row, data_date)
                 for anomaly in detect_anomalies(
                     current_spend=Decimal(row["spend"]),
@@ -106,31 +136,27 @@ class AnalysisService:
                     alert_count += 1
                     pending_data_count += 1
                     continue
-                required = [
-                    "product_cost",
-                    "commission_rate",
-                    "rate_to_cny",
-                    "start_date",
-                    "target_roas",
+                lineage_missing_names = {
+                    item.input_name
+                    for item in lineage
+                    if item.status in {"pending_data", "ambiguous"}
+                }
+                financial_missing = [
+                    {
+                        "refunds": "refund_amount",
+                        "commission_rate": "resolved_commission_rate",
+                        "exchange_rate": "rate_to_cny",
+                    }.get(name, name)
+                    for name in sorted(lineage_missing_names)
                 ]
-                if inventory_required:
-                    required.extend(
-                        ("inventory_units", "expected_daily_units")
-                    )
-                has_order_cost = row["order_product_cost_cny"] is not None
-                missing = [
-                    field
-                    for field in required
-                    if row[field] is None
-                    and not (field == "product_cost" and has_order_cost)
-                ]
-                if missing:
+                if financial_missing:
                     self._upsert_alert(
                         connection,
                         row,
                         "missing_business_input",
                         "info",
-                        f"Missing business inputs: {', '.join(missing)}",
+                        "Missing business inputs: "
+                        f"{', '.join(financial_missing)}",
                     )
                     alert_count += 1
                     pending_data_count += 1
@@ -140,7 +166,9 @@ class AnalysisService:
                     ProfitInput(
                         gmv=Decimal(row["attributed_gmv"]),
                         refunds=Decimal(row["refund_amount"]),
-                        commission_rate=Decimal(row["commission_rate"]),
+                        commission_rate=Decimal(
+                            row["resolved_commission_rate"]
+                        ),
                         product_cost=Decimal(row["product_cost"] or "0"),
                         ad_spend=Decimal(row["spend"]),
                         seller_shipping=Decimal(row["seller_shipping"]),
@@ -158,6 +186,29 @@ class AnalysisService:
                 )
                 self._upsert_profit(connection, row, profit)
                 profit_count += 1
+
+                strategy_required = ["start_date", "target_roas"]
+                if inventory_required:
+                    strategy_required.extend(
+                        ("inventory_units", "expected_daily_units")
+                    )
+                strategy_missing = [
+                    field
+                    for field in strategy_required
+                    if row[field] is None
+                ]
+                if strategy_missing:
+                    self._upsert_alert(
+                        connection,
+                        row,
+                        "missing_strategy_input",
+                        "info",
+                        "Missing strategy inputs: "
+                        f"{', '.join(strategy_missing)}",
+                    )
+                    alert_count += 1
+                    pending_data_count += 1
+                    continue
 
                 if inventory_required:
                     expected_units = Decimal(row["expected_daily_units"])
@@ -346,24 +397,29 @@ class AnalysisService:
             capabilities=self._capabilities(rows),
         )
 
+    def run_in_transaction(self, data_date: date, connection) -> AnalysisSummary:
+        """Rebuild one day using the caller's transaction boundary."""
+        return self.run(data_date, _connection=connection)
+
     @staticmethod
     def _capabilities(rows) -> dict[str, str]:
         has_metrics = bool(rows)
         has_costs = has_metrics and all(
-            row["product_cost"] is not None
-            or row["order_product_cost_cny"] is not None
+            not row["order_cost_coverage_incomplete"]
+            and (
+                row["product_cost"] is not None
+                or row["order_product_cost_cny"] is not None
+            )
             for row in rows
         )
         verified_fields = (
             "product_cost",
-            "commission_rate",
+            "resolved_commission_rate",
             "seller_shipping",
             "coupons",
             "allocated_fixed_cost",
             "refund_amount",
             "rate_to_cny",
-            "start_date",
-            "target_roas",
         )
         has_verified_profit = has_metrics and all(
             all(
@@ -374,6 +430,8 @@ class AnalysisService:
                 )
                 for field in verified_fields
             )
+            and row["refund_data_status"] in {"observed", "t3_closed_zero"}
+            and not row["order_cost_coverage_incomplete"]
             for row in rows
         )
         has_inventory = has_metrics and all(
@@ -404,14 +462,252 @@ class AnalysisService:
         }
 
     @staticmethod
+    def _profit_input_lineage(row, data_date: date) -> tuple[InputLineage, ...]:
+        day = data_date.isoformat()
+
+        def age(source_date: str | None) -> int | None:
+            if not source_date:
+                return None
+            delta = data_date - date.fromisoformat(source_date)
+            return max(0, delta.days)
+
+        def safe_ref(value: object | None) -> str:
+            if value is None:
+                return ""
+            cleaned = "".join(
+                char for char in str(value) if ord(char) >= 32 and ord(char) != 127
+            )
+            return cleaned.replace("\\", "/").rsplit("/", 1)[-1][:120]
+
+        cost_date = row["cost_effective_date"]
+        cost_ref = safe_ref(row["input_source_name"])
+        items = [
+            InputLineage(
+                "gmv",
+                row["attributed_gmv"],
+                "ready",
+                "daily_ad_metrics",
+                day,
+                0,
+                detail_code="platform_attributed_gmv",
+            ),
+            InputLineage(
+                "ad_spend",
+                row["spend"],
+                "ready",
+                "daily_ad_metrics",
+                day,
+                0,
+                detail_code="platform_ad_spend",
+            ),
+        ]
+
+        refund_ready = (
+            row["refund_amount"] is not None
+            and row["refund_data_status"] in {"observed", "t3_closed_zero"}
+        )
+        if row["refund_source_type"]:
+            refund_source_type = "daily_refund_inputs"
+            refund_source_date = row["refund_source_date"] or day
+            refund_source_ref = safe_ref(row["refund_source_ref"])
+        else:
+            refund_source_type = "product_costs"
+            refund_source_date = cost_date
+            refund_source_ref = cost_ref
+        refund_detail = (
+            "t3_no_refund_observed"
+            if row["refund_data_status"] == "t3_closed_zero"
+            else "refund_observed"
+            if refund_ready
+            else "refund_source_missing"
+        )
+        items.append(
+            InputLineage(
+                "refunds",
+                row["refund_amount"] if refund_ready else None,
+                "ready" if refund_ready else "pending_data",
+                refund_source_type,
+                refund_source_date if refund_ready else None,
+                age(refund_source_date) if refund_ready else None,
+                refund_source_ref
+                if row["refund_source_type"]
+                else cost_ref
+                if refund_ready
+                else "",
+                refund_detail,
+            )
+        )
+
+        fee_rate = row["resolved_commission_rate"]
+        fee_selection = row["fee_selection"] or "fee_rate_missing"
+        if row["fee_source_sha256"]:
+            fee_source_type = "platform_fee_statements"
+            fee_source_date = row["fee_period_end"]
+            fee_ref = safe_ref(row["fee_source_name"])
+        else:
+            fee_source_type = "product_costs"
+            fee_source_date = cost_date
+            fee_ref = cost_ref
+        fee_status = (
+            "pending_data"
+            if fee_rate is None
+            else "carried_forward"
+            if fee_selection in {"carried_forward", "legacy_cost_rate"}
+            else "ready"
+        )
+        items.append(
+            InputLineage(
+                "commission_rate",
+                fee_rate,
+                fee_status,
+                fee_source_type,
+                fee_source_date if fee_rate is not None else None,
+                age(fee_source_date) if fee_rate is not None else None,
+                fee_ref if fee_rate is not None else "",
+                fee_selection,
+            )
+        )
+
+        if row["order_cost_allocation_ambiguous"]:
+            product_cost = InputLineage(
+                "product_cost",
+                None,
+                "ambiguous",
+                row["cost_source_type"] or "order_costs",
+                row["cost_source_date"],
+                age(row["cost_source_date"]),
+                detail_code="multiple_metric_allocation",
+            )
+        elif row["order_product_cost_cny"] is not None:
+            product_cost = InputLineage(
+                "product_cost",
+                row["order_product_cost_cny"],
+                "ready",
+                row["cost_source_type"] or "order_cost_snapshots",
+                row["cost_source_date"] or day,
+                age(row["cost_source_date"] or day),
+                detail_code="resolved_product_cost_cny",
+            )
+        elif row["order_cost_coverage_incomplete"]:
+            product_cost = InputLineage(
+                "product_cost",
+                None,
+                "pending_data",
+                "order_cost_snapshots",
+                day,
+                0,
+                detail_code="order_cost_coverage_incomplete",
+            )
+        elif row["product_cost"] is not None:
+            product_cost = InputLineage(
+                "product_cost",
+                row["product_cost"],
+                "ready",
+                "product_costs",
+                cost_date,
+                age(cost_date),
+                cost_ref,
+                "product_cost_original_currency",
+            )
+        else:
+            product_cost = InputLineage(
+                "product_cost",
+                None,
+                "pending_data",
+                "product_costs",
+                None,
+                None,
+                detail_code="product_cost_missing",
+            )
+        items.append(product_cost)
+
+        for input_name, column in (
+            ("seller_shipping", "seller_shipping"),
+            ("coupons", "coupons"),
+            ("allocated_fixed_cost", "allocated_fixed_cost"),
+        ):
+            value = row[column]
+            items.append(
+                InputLineage(
+                    input_name,
+                    value,
+                    "ready" if value is not None else "pending_data",
+                    "product_costs",
+                    cost_date if value is not None else None,
+                    age(cost_date) if value is not None else None,
+                    cost_ref if value is not None else "",
+                    f"{input_name}_observed" if value is not None else f"{input_name}_missing",
+                )
+            )
+
+        exchange_rate = row["rate_to_cny"]
+        exchange_source_date = row["exchange_source_date"] or (
+            day if exchange_rate is not None else None
+        )
+        exchange_detail = row["exchange_resolution_status"] or (
+            "exact_date" if exchange_rate is not None else "exchange_rate_missing"
+        )
+        exchange_status = (
+            "pending_data"
+            if exchange_rate is None
+            else "carried_forward"
+            if exchange_source_date != day or "fallback" in exchange_detail
+            else "ready"
+        )
+        items.append(
+            InputLineage(
+                "exchange_rate",
+                exchange_rate,
+                exchange_status,
+                "exchange_rates",
+                exchange_source_date,
+                age(exchange_source_date),
+                safe_ref(exchange_detail) if exchange_rate is not None else "",
+                exchange_detail,
+            )
+        )
+        return tuple(items)
+
+    @staticmethod
+    def _insert_lineage(connection, row, items: tuple[InputLineage, ...]) -> None:
+        for item in items:
+            connection.execute(
+                """
+                INSERT INTO profit_input_lineage(
+                    platform, store, account_id, campaign_id, sku_id,
+                    data_date, input_name, value_text, status, source_type,
+                    source_date, age_days, source_ref, detail_code
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    row["platform"],
+                    row["store"],
+                    row["account_id"],
+                    row["campaign_id"],
+                    row["sku_id"],
+                    row["data_date"],
+                    item.input_name,
+                    item.value_text,
+                    item.status,
+                    item.source_type,
+                    item.source_date,
+                    item.age_days,
+                    item.source_ref,
+                    item.detail_code,
+                ),
+            )
+
+    @staticmethod
     def _upsert_profit(connection, row, profit) -> None:
         connection.execute(
             """
             INSERT INTO profit_results(
                 platform, store, account_id, campaign_id, sku_id, data_date,
                 net_sales_cny, platform_commission_cny, gross_profit_cny,
-                net_profit_cny, break_even_roas
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                net_profit_cny, break_even_roas, fee_effective_rate,
+                fee_period_start, fee_period_end, fee_selection,
+                fee_source_name, fee_source_sha256
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(
                 platform, store, account_id, campaign_id, sku_id, data_date
             ) DO UPDATE SET
@@ -420,6 +716,12 @@ class AnalysisService:
                 gross_profit_cny=excluded.gross_profit_cny,
                 net_profit_cny=excluded.net_profit_cny,
                 break_even_roas=excluded.break_even_roas,
+                fee_effective_rate=excluded.fee_effective_rate,
+                fee_period_start=excluded.fee_period_start,
+                fee_period_end=excluded.fee_period_end,
+                fee_selection=excluded.fee_selection,
+                fee_source_name=excluded.fee_source_name,
+                fee_source_sha256=excluded.fee_source_sha256,
                 updated_at=strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
             """,
             (
@@ -438,6 +740,12 @@ class AnalysisService:
                     if profit.break_even_roas is None
                     else str(profit.break_even_roas)
                 ),
+                row["resolved_commission_rate"],
+                row["fee_period_start"],
+                row["fee_period_end"],
+                row["fee_selection"],
+                row["fee_source_name"],
+                row["fee_source_sha256"],
             ),
         )
 

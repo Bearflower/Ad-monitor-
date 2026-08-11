@@ -48,9 +48,13 @@ DESCRIPTIONS = {
 
 def build_launch_checklist(
     readiness: LaunchReadiness,
+    *,
+    excluded_codes: frozenset[str] = frozenset(),
 ) -> tuple[LaunchItem, ...]:
     items = []
     for code, description in DESCRIPTIONS.items():
+        if code in excluded_codes:
+            continue
         if not getattr(readiness, code):
             items.append(
                 LaunchItem(

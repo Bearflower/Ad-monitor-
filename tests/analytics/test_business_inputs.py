@@ -101,8 +101,16 @@ def test_import_business_inputs_enables_profit_analysis(tmp_path):
         writer.writerows(rows)
 
     assert import_business_inputs(database, source) == 1
+    with database.connect() as connection:
+        cost = connection.execute(
+            """
+            SELECT refund_data_status, input_source_name
+            FROM product_costs WHERE sku_id='__ALL__'
+            """
+        ).fetchone()
     summary = AnalysisService(database).run(date(2026, 7, 23))
 
+    assert tuple(cost) == ("observed", "business.csv")
     assert summary.profit_results == 1
     assert summary.alerts == 0
 
@@ -134,7 +142,8 @@ def test_minimal_business_input_maps_unique_metric_for_date(tmp_path):
     with database.connect() as connection:
         row = connection.execute(
             """
-            SELECT product_cost, refund_amount, commission_rate
+            SELECT product_cost, refund_amount, commission_rate,
+                   refund_data_status, input_source_name
             FROM product_costs
             WHERE sku_id='__ALL__' AND effective_date='2026-07-23'
             """
@@ -143,7 +152,53 @@ def test_minimal_business_input_maps_unique_metric_for_date(tmp_path):
         "product_cost": "120",
         "refund_amount": "0",
         "commission_rate": "0",
+        "refund_data_status": "observed",
+        "input_source_name": "minimal.csv",
     }
+
+
+def test_minimal_business_input_keeps_blank_refund_pending(tmp_path):
+    database = _database(tmp_path)
+    source = tmp_path / "minimal-pending-refund.csv"
+    source.write_text(
+        "data_date,total_product_cost,refund_amount\n"
+        "2026-07-23,120,\n",
+        encoding="utf-8",
+    )
+
+    assert import_minimal_business_inputs(database, source) == 1
+
+    with database.connect() as connection:
+        row = connection.execute(
+            """
+            SELECT refund_amount, refund_data_status, input_source_name
+            FROM product_costs
+            WHERE sku_id='__ALL__' AND effective_date='2026-07-23'
+            """
+        ).fetchone()
+    summary = AnalysisService(database).run(date(2026, 7, 23))
+
+    assert dict(row) == {
+        "refund_amount": "0",
+        "refund_data_status": "pending_data",
+        "input_source_name": "minimal-pending-refund.csv",
+    }
+    assert summary.profit_results == 0
+
+
+def test_mock_seed_marks_refund_input_observed(tmp_path):
+    database = _database(tmp_path)
+
+    AnalysisService(database).seed_mock_business_data(date(2026, 7, 23))
+
+    with database.connect() as connection:
+        row = connection.execute(
+            """
+            SELECT refund_data_status, input_source_name
+            FROM product_costs WHERE sku_id='__ALL__'
+            """
+        ).fetchone()
+    assert tuple(row) == ("observed", "mock")
 
 
 def test_minimal_business_input_rejects_ambiguous_date(tmp_path):

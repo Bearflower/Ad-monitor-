@@ -1,0 +1,56 @@
+<h2>Mac 版下一阶段上线顺序</h2>
+<p class="subtitle">先合并已完成代码，再建设统一入口，最后做真实数据验收与广告现场激活。</p>
+
+<div style="display:grid;grid-template-columns:repeat(5,1fr);gap:10px;align-items:stretch">
+  <div style="padding:15px;background:#dbeafe;border-radius:10px">
+    <div class="label">第 1 批</div>
+    <h3>代码归并</h3>
+    <p>SKU 成本功能分支合入 main</p>
+    <p>149 项回归测试</p>
+  </div>
+  <div style="padding:15px;background:#e0f2fe;border-radius:10px">
+    <div class="label">第 2 批</div>
+    <h3>统一 Web 入口</h3>
+    <p>SKU 成本、费用、出资、提款、分润可写</p>
+    <p>所有修改留审计记录</p>
+  </div>
+  <div style="padding:15px;background:#dcfce7;border-radius:10px">
+    <div class="label">第 3 批</div>
+    <h3>订单进销存</h3>
+    <p>采购入库、订单出库、退货、库存结余</p>
+    <p>每条订单匹配成本</p>
+  </div>
+  <div style="padding:15px;background:#fef3c7;border-radius:10px">
+    <div class="label">第 4 批</div>
+    <h3>真实数据上线</h3>
+    <p>退款、库存、汇率、广告数据</p>
+    <p>飞书通知与审批</p>
+  </div>
+  <div style="padding:15px;background:#fee2e2;border-radius:10px">
+    <div class="label">第 5 批</div>
+    <h3>连续验收</h3>
+    <p>Shadow 对账 3 天 ≥99%</p>
+    <p>回滚演练后再考虑 Live</p>
+  </div>
+</div>
+
+<div class="split" style="margin-top:22px">
+  <div class="mockup">
+    <div class="mockup-header">你现在可以并行完成</div>
+    <div class="mockup-body">
+      <h3>填写现有待补成本表</h3>
+      <p>只填写黄色“单件成本（人民币）”。完成后直接导入 SQLite；未来 Web 页面继续维护历史成本。</p>
+    </div>
+  </div>
+  <div class="mockup">
+    <div class="mockup-header">暂时不要做</div>
+    <div class="mockup-body">
+      <h3>不要把采购和库存塞入 SKU 成本表</h3>
+      <p>成本主数据与库存流水职责不同，混在一起会造成重复录入和无法对账。</p>
+    </div>
+  </div>
+</div>
+
+<div style="margin-top:20px;padding:15px;background:#f3f4f6;border-radius:10px">
+  <strong>注意：</strong>现有“上线待办”只覆盖原广告系统。统一 Web、人工记账流水和进销存属于新增范围，需要加入新版上线清单。
+</div>

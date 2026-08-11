@@ -1,0 +1,79 @@
+[
+  {
+    "order_card": {
+      "card_header": {
+        "order_sn": "260801REFUND01"
+      },
+      "status_info": {
+        "status": "Return/Refund"
+      },
+      "order_ext_info": {
+        "order_id": 1001,
+        "logistics_status": 5
+      },
+      "payment_info": {
+        "total_price": 10000000,
+        "currency": 7
+      },
+      "item_info_group": {
+        "item_info_list": [
+          {
+            "item_list": [
+              {
+                "name": "Sanitized Product",
+                "description": "Variation: Blue",
+                "amount": 1,
+                "inner_item_ext_info": {
+                  "item_id": 123,
+                  "model_id": 456
+                }
+              }
+            ]
+          }
+        ]
+      }
+    }
+  },
+  {
+    "order_card": {
+      "card_header": {
+        "order_sn": "260802COMPLETE01"
+      },
+      "status_info": {
+        "status": "Completed"
+      },
+      "order_ext_info": {
+        "order_id": 1002,
+        "logistics_status": 4
+      },
+      "payment_info": {
+        "total_price": 20000000,
+        "currency": 7
+      },
+      "item_info_group": {
+        "item_info_list": []
+      }
+    }
+  },
+  {
+    "order_card": {
+      "card_header": {
+        "order_sn": "260803CANCEL01"
+      },
+      "status_info": {
+        "status": "Cancelled"
+      },
+      "order_ext_info": {
+        "order_id": 1003,
+        "logistics_status": 0
+      },
+      "payment_info": {
+        "total_price": 0,
+        "currency": 7
+      },
+      "item_info_group": {
+        "item_info_list": []
+      }
+    }
+  }
+]

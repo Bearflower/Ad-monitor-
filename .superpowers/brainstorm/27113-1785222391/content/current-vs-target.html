@@ -1,0 +1,43 @@
+<h2>记账表：从“手工填报”转成“系统自动归集”</h2>
+<p class="subtitle">当前表保留了完整经营框架，但利润口径和人工录入边界需要重构。</p>
+
+<div class="split">
+  <div class="mockup">
+    <div class="mockup-header">当前结构</div>
+    <div class="mockup-body">
+      <div class="label">人工重复录入</div>
+      <p>收入明细 → 订单号、平台、结算金额</p>
+      <p>出库产品 → 再填订单号、SKU、数量、成本</p>
+      <p>广告充值 / 费用 / 汇率 → 分散维护</p>
+      <div style="margin-top:16px;padding:12px;background:#fee2e2;border-radius:8px">
+        <strong>核心风险</strong>
+        <p>备货采购与出库成本同时扣减，会把库存采购和销售成本重复计入利润。</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="mockup">
+    <div class="mockup-header">建议结构</div>
+    <div class="mockup-body">
+      <div class="label">系统自动区</div>
+      <p>Shopee / TikTok 订单、退款、平台费用、物流状态</p>
+      <p>Seller SKU × 数量 × SKU成本 → 自动计算销售成本</p>
+      <p>广告数据与汇率 → 自动同步或集中维护</p>
+      <div class="label" style="margin-top:16px">你只维护</div>
+      <p>① SKU成本　② 无法从平台获取的线下费用　③ 合伙人实缴/提款</p>
+      <div style="margin-top:16px;padding:12px;background:#dcfce7;border-radius:8px">
+        <strong>利润与现金分开</strong>
+        <p>利润按收入－销售成本－平台费－广告费－经营费；备货采购只影响现金和库存。</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="section" style="margin-top:24px">
+  <h3>当前表已确认的三个技术问题</h3>
+  <ul>
+    <li>TikTok 长订单号显示为科学计数法，存在精度丢失风险。</li>
+    <li>同一订单出现重复行，当前没有稳定的去重检查。</li>
+    <li>60% / 40% 分成比例写死在公式里，不便于追踪调整历史。</li>
+  </ul>
+</div>

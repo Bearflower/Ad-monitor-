@@ -1,6 +1,6 @@
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 from typing import Protocol
 from urllib.request import urlopen
@@ -19,6 +19,12 @@ class ExchangeRateRangeSource(Protocol):
     ) -> dict[date, Decimal]: ...
 
 
+class PublishedExchangeRateSource(Protocol):
+    def fetch_published(
+        self, currency: str, start: date, end: date
+    ) -> dict[date, Decimal]: ...
+
+
 @dataclass(frozen=True)
 class ExchangeRateResolution:
     currency: str
@@ -26,6 +32,7 @@ class ExchangeRateResolution:
     rate: Decimal
     status: str
     source_date: date
+    execution_date: date | None = None
 
 
 @dataclass(frozen=True)
@@ -48,7 +55,7 @@ class EcbExchangeRateSource:
     fetcher: Callable[[str], bytes] = _download
     url: str = ECB_HISTORY_URL
 
-    def fetch_range(
+    def fetch_published(
         self, currency: str, start: date, end: date
     ) -> dict[date, Decimal]:
         if start > end:
@@ -72,10 +79,22 @@ class EcbExchangeRateSource:
                 if child.attrib.get("currency") and child.attrib.get("rate")
             }
             if currency in rates and "CNY" in rates:
-                published[date.fromisoformat(time_value)] = (
-                    rates["CNY"] / rates[currency]
-                )
+                published_day = date.fromisoformat(time_value)
+                if start <= published_day <= end:
+                    published[published_day] = (
+                        rates["CNY"] / rates[currency]
+                    )
+        return published
 
+    def fetch_range(
+        self, currency: str, start: date, end: date
+    ) -> dict[date, Decimal]:
+        if start > end:
+            raise ValueError("exchange-rate start date must not exceed end date")
+        if currency.strip().upper() == "CNY":
+            return self.fetch_published(currency, start, end)
+
+        published = self.fetch_published(currency, date.min, end)
         result: dict[date, Decimal] = {}
         applicable = sorted(day for day in published if day <= end)
         current = start
@@ -177,4 +196,147 @@ def ensure_exchange_rate(
         )
     return ExchangeRateResolution(
         currency, data_date, rate, "local_fallback", source_date
+    )
+
+
+def resolve_scheduled_exchange_rate(
+    database: Database,
+    source: PublishedExchangeRateSource,
+    *,
+    currency: str,
+    execution_date: date,
+    report_date: date,
+    max_staleness_days: int,
+    resolved_at: datetime | None = None,
+) -> ExchangeRateResolution:
+    currency = currency.strip().upper()
+    start = execution_date - timedelta(days=max_staleness_days)
+    resolution_time = resolved_at or datetime.now().astimezone()
+    try:
+        published = source.fetch_published(currency, start, execution_date)
+    except (OSError, ValueError):
+        published = {}
+
+    candidates = [
+        day for day in published if start <= day <= execution_date
+    ]
+    if candidates:
+        source_date = max(candidates)
+        return _store_scheduled_resolution(
+            database=database,
+            currency=currency,
+            report_date=report_date,
+            execution_date=execution_date,
+            source_date=source_date,
+            rate=published[source_date],
+            status=_scheduled_resolution_status(
+                execution_date, source_date
+            ),
+            resolved_at=resolution_time,
+        )
+
+    local = _latest_local_rate(
+        database,
+        currency=currency,
+        start=start,
+        end=execution_date,
+    )
+    if local is None:
+        raise ValueError(
+            f"no {currency}/CNY exchange rate within configured window"
+        )
+    source_date, rate = local
+    return _store_scheduled_resolution(
+        database=database,
+        currency=currency,
+        report_date=report_date,
+        execution_date=execution_date,
+        source_date=source_date,
+        rate=rate,
+        status=_scheduled_resolution_status(execution_date, source_date),
+        resolved_at=resolution_time,
+    )
+
+
+def _scheduled_resolution_status(
+    execution_date: date, source_date: date
+) -> str:
+    if source_date == execution_date:
+        return "execution_day"
+    if source_date == execution_date - timedelta(days=1):
+        return "previous_day"
+    return "recent_business_day"
+
+
+def _latest_local_rate(
+    database: Database,
+    *,
+    currency: str,
+    start: date,
+    end: date,
+) -> tuple[date, Decimal] | None:
+    with database.connect() as connection:
+        row = connection.execute(
+            """
+            SELECT COALESCE(source_date, rate_date) AS actual_source_date,
+                   rate_to_cny
+            FROM exchange_rates
+            WHERE currency=?
+              AND COALESCE(source_date, rate_date) BETWEEN ? AND ?
+            ORDER BY actual_source_date DESC
+            LIMIT 1
+            """,
+            (currency, start.isoformat(), end.isoformat()),
+        ).fetchone()
+    if row is None:
+        return None
+    return (
+        date.fromisoformat(row["actual_source_date"]),
+        Decimal(row["rate_to_cny"]),
+    )
+
+
+def _store_scheduled_resolution(
+    *,
+    database: Database,
+    currency: str,
+    report_date: date,
+    execution_date: date,
+    source_date: date,
+    rate: Decimal,
+    status: str,
+    resolved_at: datetime,
+) -> ExchangeRateResolution:
+    with database.transaction() as connection:
+        connection.execute(
+            """
+            INSERT INTO exchange_rates(
+                currency, rate_date, rate_to_cny, execution_date,
+                source_date, resolution_status, resolved_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(currency, rate_date) DO UPDATE SET
+                rate_to_cny=excluded.rate_to_cny,
+                execution_date=excluded.execution_date,
+                source_date=excluded.source_date,
+                resolution_status=excluded.resolution_status,
+                resolved_at=excluded.resolved_at
+            """,
+            (
+                currency,
+                report_date.isoformat(),
+                str(rate),
+                execution_date.isoformat(),
+                source_date.isoformat(),
+                status,
+                resolved_at.isoformat(),
+            ),
+        )
+    return ExchangeRateResolution(
+        currency=currency,
+        data_date=report_date,
+        rate=rate,
+        status=status,
+        source_date=source_date,
+        execution_date=execution_date,
     )

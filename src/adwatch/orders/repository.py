@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
 
 from adwatch.orders.models import PlatformOrderLine, PlatformSku
@@ -108,12 +108,24 @@ class OrderRepository:
                  AND orders.store=sku.store
                  AND orders.item_id=sku.item_id
                  AND orders.model_id=sku.model_id
+                 AND LOWER(TRIM(COALESCE(orders.order_status, '')))
+                     NOT IN ('cancelled', 'canceled')
                 WHERE NOT EXISTS (
                     SELECT 1 FROM sku_cost_history AS cost
                     WHERE cost.platform=sku.platform
                       AND cost.store=sku.store
                       AND cost.seller_sku=sku.seller_sku
                 )
+                  AND (
+                    orders.order_id IS NOT NULL
+                    OR NOT EXISTS (
+                        SELECT 1 FROM platform_order_lines AS all_orders
+                        WHERE all_orders.platform=sku.platform
+                          AND all_orders.store=sku.store
+                          AND all_orders.item_id=sku.item_id
+                          AND all_orders.model_id=sku.model_id
+                    )
+                  )
                 GROUP BY
                     sku.platform, sku.store, sku.product_name,
                     sku.item_id, sku.model_id, sku.seller_sku,
@@ -154,5 +166,100 @@ class OrderRepository:
                     effective_date.isoformat(),
                     str(unit_cost_cny),
                     note,
+                ),
+            )
+
+    def sku_map(
+        self,
+        *,
+        platform: str,
+        store: str,
+    ) -> dict[tuple[str, str], tuple[str, str, str]]:
+        with self.database.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT item_id, model_id, seller_sku,
+                       variation_name, product_name
+                FROM platform_sku_mappings
+                WHERE platform=? AND store=?
+                """,
+                (platform, store),
+            ).fetchall()
+        return {
+            (str(row["item_id"]), str(row["model_id"])): (
+                str(row["seller_sku"]),
+                str(row["variation_name"]),
+                str(row["product_name"]),
+            )
+            for row in rows
+        }
+
+    def start_sync_run(
+        self,
+        *,
+        run_id: str,
+        platform: str,
+        store: str,
+        started_at: datetime,
+        start_date: date,
+        end_date: date,
+    ) -> None:
+        with self.database.transaction() as connection:
+            connection.execute(
+                """
+                INSERT INTO order_sync_runs(
+                    id, platform, store, started_at, start_date, end_date,
+                    status
+                ) VALUES (?, ?, ?, ?, ?, ?, 'running')
+                """,
+                (
+                    run_id,
+                    platform,
+                    store,
+                    started_at.isoformat(),
+                    start_date.isoformat(),
+                    end_date.isoformat(),
+                ),
+            )
+
+    def finish_sync_run(
+        self,
+        *,
+        run_id: str,
+        finished_at: datetime,
+        status: str,
+        order_count: int,
+        sku_count: int,
+        rejected_count: int,
+        refund_count: int = 0,
+        logistics_count: int = 0,
+        inventory_snapshot_count: int = 0,
+        product_rejected_count: int = 0,
+        order_rejected_count: int = 0,
+        error_message: str | None = None,
+    ) -> None:
+        with self.database.transaction() as connection:
+            connection.execute(
+                """
+                UPDATE order_sync_runs
+                SET finished_at=?, status=?, order_count=?, sku_count=?,
+                rejected_count=?, product_rejected_count=?,
+                order_rejected_count=?, refund_count=?, logistics_count=?,
+                inventory_snapshot_count=?, error_message=?
+                WHERE id=?
+                """,
+                (
+                    finished_at.isoformat(),
+                    status,
+                    order_count,
+                    sku_count,
+                    rejected_count,
+                    product_rejected_count,
+                    order_rejected_count,
+                    refund_count,
+                    logistics_count,
+                    inventory_snapshot_count,
+                    error_message,
+                    run_id,
                 ),
             )

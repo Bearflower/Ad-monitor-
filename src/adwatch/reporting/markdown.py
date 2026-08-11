@@ -1,7 +1,13 @@
 from dataclasses import dataclass
+from datetime import date
 from decimal import Decimal
 
-from adwatch.reporting.read_model import DailySnapshot, PlatformSummary
+from adwatch.reporting.read_model import (
+    DailySnapshot,
+    PlatformSummary,
+    ReportReadModel,
+)
+from adwatch.storage.db import Database
 
 
 @dataclass(frozen=True)
@@ -32,9 +38,13 @@ CAPABILITY_LABELS = {
 }
 STATUS_LABELS = {
     "ready": "已就绪",
+    "carried_forward": "沿用已有数据",
+    "partial": "部分就绪",
     "pending_data": "待补数据",
     "pending_external": "等待外部配置",
     "blocked": "已阻止",
+    "ambiguous": "口径不明确",
+    "not_applicable": "不适用",
     "proposed": "待审批",
     "approved": "已批准",
     "rejected": "已拒绝",
@@ -65,6 +75,22 @@ REASON_LABELS = {
     "Verified product candidate uses no more than 20% of the budget pool":
         "已验证候选商品的复测预算不超过预算池的 20%",
 }
+FEE_SELECTION_LABELS = {
+    "covering_period": "周期覆盖",
+    "carried_forward": "沿用最近周期",
+    "legacy_cost_rate": "历史成本费率",
+}
+INPUT_LABELS = {
+    "gmv": "广告归因销售额",
+    "refunds": "退款金额",
+    "commission_rate": "平台费率",
+    "product_cost": "商品成本",
+    "ad_spend": "广告花费",
+    "seller_shipping": "卖家运费",
+    "coupons": "优惠券",
+    "allocated_fixed_cost": "分摊固定成本",
+    "exchange_rate": "汇率",
+}
 
 
 def _platform_line(snapshot: DailySnapshot, platform: str) -> str:
@@ -86,7 +112,9 @@ def _platform_line(snapshot: DailySnapshot, platform: str) -> str:
     )
 
 
-def _cny(value: Decimal) -> str:
+def _cny(value: Decimal | None) -> str:
+    if value is None:
+        return "待补数据"
     sign = "-" if value < 0 else ""
     return f"{sign}¥{abs(value):.2f}"
 
@@ -192,6 +220,118 @@ def _recommendation_lines(snapshot: DailySnapshot) -> tuple[str, ...]:
     return tuple(lines)
 
 
+def _fee_rate_lines(snapshot: DailySnapshot) -> tuple[str, ...]:
+    if not snapshot.fee_rates:
+        return ("- 平台费率：待补数据",)
+    lines = []
+    for item in snapshot.fee_rates:
+        label = PLATFORM_LABELS.get(item.platform, item.platform)
+        if item.effective_rate is None:
+            lines.append(f"- {label} / {item.store}：待补数据")
+            continue
+        selection = FEE_SELECTION_LABELS.get(
+            item.selection, item.selection
+        )
+        details = [f"{item.effective_rate * 100:.4f}%", selection]
+        if item.period_start is not None and item.period_end is not None:
+            details.insert(
+                1,
+                (
+                    f"{item.period_start.isoformat()} 至 "
+                    f"{item.period_end.isoformat()}"
+                ),
+            )
+        if item.source_name:
+            details.append(item.source_name)
+        lines.append(f"- {label} / {item.store}：{'｜'.join(details)}")
+    return tuple(lines)
+
+
+def _profit_source_lines(snapshot: DailySnapshot) -> tuple[str, ...]:
+    if not snapshot.profit_sources:
+        return ("- 暂无可追溯的利润来源",)
+    lines = []
+    for item in snapshot.profit_sources:
+        label = PLATFORM_LABELS.get(item.platform, item.platform)
+        profit_status = (
+            "利润已就绪"
+            if item.profit_status == "ready"
+            else "利润部分就绪"
+            if item.profit_status == "partial"
+            else "利润待补数据"
+        )
+        inventory_date = (
+            item.inventory_snapshot_date.isoformat()
+            if item.inventory_snapshot_date is not None
+            else "待补数据"
+        )
+        exchange_date = (
+            item.exchange_source_date.isoformat()
+            if item.exchange_source_date is not None
+            else "待补数据"
+        )
+        fee_period = (
+            f"{item.fee_period_start.isoformat()} 至 "
+            f"{item.fee_period_end.isoformat()}"
+            if item.fee_period_start is not None
+            and item.fee_period_end is not None
+            else "待补数据"
+        )
+        fee_selection = FEE_SELECTION_LABELS.get(
+            item.fee_selection, item.fee_selection
+        )
+        missing = (
+            "、".join(
+                INPUT_LABELS.get(name, name) for name in item.missing_inputs
+            )
+            if item.missing_inputs
+            else "无"
+        )
+        lines.extend(
+            (
+                f"- {label} / {item.store}：{profit_status}",
+                (
+                    f"  - 广告指标 {item.metric_rows} 行 / "
+                    f"归因订单 {item.attributed_orders} 单 / "
+                    f"平台订单 {item.platform_orders} 单"
+                ),
+                (
+                    f"  - 成本覆盖：{item.confirmed_cost_orders}/"
+                    f"{item.platform_orders} 个平台订单"
+                ),
+                (
+                    f"  - 退款金额观测：{item.refund_amount_observations}/"
+                    f"{item.refund_observations} 个退款观测"
+                ),
+                f"  - 库存快照：{inventory_date}",
+                (
+                    f"  - 汇率来源：{exchange_date}"
+                    f"（{item.exchange_resolution_status}）"
+                ),
+                f"  - 结算费率周期：{fee_period}（{fee_selection}）",
+                f"  - 关键缺口：{missing}",
+            )
+        )
+        for lineage in snapshot.profit_input_lineage:
+            if lineage.platform != item.platform or lineage.store != item.store:
+                continue
+            input_label = INPUT_LABELS.get(
+                lineage.input_name, lineage.input_name
+            )
+            status = STATUS_LABELS.get(lineage.status, lineage.status)
+            source_date = (
+                lineage.source_date.isoformat()
+                if lineage.source_date is not None
+                else "无来源日期"
+            )
+            lines.append(
+                f"  - {input_label}：{status}｜{lineage.source_type}｜"
+                f"{source_date}｜{lineage.covered_rows}/"
+                f"{lineage.total_rows} 行"
+            )
+    return tuple(lines)
+
+
 def present_daily_report(
     snapshot: DailySnapshot, *, simulated: bool
 ) -> DailyReportPresentation:
@@ -208,6 +348,8 @@ def present_daily_report(
         f"{STATUS_LABELS.get(status, status)}"
         for name, status in snapshot.capabilities.items()
     )
+    fee_rates = _fee_rate_lines(snapshot)
+    profit_sources = _profit_source_lines(snapshot)
     markdown = "\n".join(
         (
             f"# 广告经营日报｜{snapshot.data_date.isoformat()}【{marker}】",
@@ -232,6 +374,12 @@ def present_daily_report(
             "",
             "## 六、数据可信度",
             *capabilities,
+            "",
+            "## 七、平台费率来源",
+            *fee_rates,
+            "",
+            "## 八、数据来源与新鲜度",
+            *profit_sources,
         )
     )
     return DailyReportPresentation(markdown, risk_label, header_template)
@@ -243,45 +391,280 @@ def render_daily_markdown(
     return present_daily_report(snapshot, simulated=simulated).markdown
 
 
-def render_weekly_markdown(snapshots: list[DailySnapshot]) -> str:
-    if not snapshots:
-        return "# 广告周报\n\n无数据"
-    return "\n\n".join(
-        ["# 广告周报"]
-        + [
-            render_daily_markdown(snapshot, simulated=False)
-            for snapshot in snapshots
-        ]
+def _pct(value: Decimal, total: Decimal) -> str:
+    """计算占比百分比。"""
+    if total == 0:
+        return "-"
+    return f"{float(value / total * 100):.1f}%"
+
+
+def _format_mom(mom_value: str | None) -> str:
+    """格式化环比字符串，None 时显示为 '-'。"""
+    return mom_value if mom_value is not None else "-"
+
+
+def _severity_label(severity: str) -> str:
+    labels = {
+        "critical": "严重",
+        "error": "错误",
+        "warning": "警告",
+        "info": "提示",
+    }
+    return labels.get(severity, severity)
+
+
+def _action_label(action: str) -> str:
+    labels = {
+        "increase_budget": "提价建议",
+        "reduce_budget": "降价建议",
+        "adjust_roas_target": "调整 ROAS 目标",
+        "pause": "暂停建议",
+        "resume": "恢复建议",
+        "allocate_retest": "复测预算分配",
+        "approved": "已审批",
+    }
+    return labels.get(action, action)
+
+
+def render_weekly_markdown(database: Database, week_end: date) -> str:
+    """生成周报 markdown。
+
+    调用 ReportReadModel.weekly() 获取聚合数据，渲染为可读的 Markdown 报告。
+    """
+    read_model = ReportReadModel(database)
+    data = read_model.weekly(week_end)
+    start = data["period_start"]
+    end = data["period_end"]
+    t = data["totals"]
+    mom = data["mom"]
+
+    lines = [
+        f"# 广告周报｜{start.isoformat()} 至 {end.isoformat()}",
+        "",
+        "## 本周汇总",
+        "| 指标 | 本周 | 环比 |",
+        "|------|------|------|",
+        (
+            f"| 广告消耗 | {_cny(t['ad_spend_cny'])} "
+            f"| {_format_mom(mom['spend'])} |"
+        ),
+        (
+            f"| GMV | {_cny(t['gmv'])} "
+            f"| {_format_mom(mom['gmv'])} |"
+        ),
+        (
+            f"| 净利润 | {_cny(t['net_profit'])} "
+            f"| {_format_mom(mom['net_profit'])} |"
+        ),
+        "",
+        "## 平台表现",
+    ]
+
+    for p in data["platforms"]:
+        label = PLATFORM_LABELS.get(p["platform"], p["platform"])
+        roas = "不可计算" if p["roas"] is None else f"{p['roas']:.2f}"
+        profit = (
+            "利润待补数据"
+            if p["net_profit"] is None
+            else f"净利润 {_cny(p['net_profit'])}"
+        )
+        lines.append(
+            f"- {label}：消耗 {p['spend']:.2f} / GMV {p['gmv']:.2f} / "
+            f"ROAS {roas} / 订单 {p['orders']} / {profit}"
+        )
+
+    lines.extend([
+        "",
+        "## 每日趋势",
+        "| 日期 | 消耗 | GMV | 利润 |",
+        "|------|------|-----|------|",
+    ])
+    for point in data["daily_trends"]:
+        profit_str = (
+            _cny(point.net_profit)
+            if point.net_profit is not None
+            else "待补数据"
+        )
+        lines.append(
+            f"| {point.data_date.isoformat()} | "
+            f"{point.spend:.2f} | {point.gmv:.2f} | {profit_str} |"
+        )
+
+    lines.extend([
+        "",
+        "## 异常告警",
+    ])
+    if data["alerts"]:
+        for severity, count in sorted(data["alerts"].items()):
+            lines.append(
+                f"- [{_severity_label(severity)}]：共 {count} 次"
+            )
+    else:
+        lines.append("- 暂无异常告警")
+
+    lines.extend([
+        "",
+        "## 策略建议",
+    ])
+    if data["recommendations"]:
+        for action, count in sorted(data["recommendations"].items()):
+            lines.append(f"- {_action_label(action)}：{count} 条")
+    else:
+        lines.append("- 暂无建议")
+
+    lines.extend([
+        "",
+        "## 采集质量",
+    ])
+    c = data["collection"]
+    lines.append(
+        f"- 成功：{c['success_days']}/{c['total_days']} 天"
+    )
+    lines.append(
+        f"- 异常：{c['failed_runs']} 次"
     )
 
+    return "\n".join(lines)
 
-def render_monthly_markdown(
-    snapshots: list[DailySnapshot], *, month: str
-) -> str:
-    if not snapshots:
-        return f"# 广告月报 {month}\n\n无数据"
-    platform_totals: dict[str, dict[str, object]] = {}
-    for snapshot in snapshots:
-        for item in snapshot.platforms:
-            totals = platform_totals.setdefault(
-                item.platform,
-                {
-                    "spend": 0,
-                    "gmv": 0,
-                    "orders": 0,
-                },
-            )
-            totals["spend"] += item.spend
-            totals["gmv"] += item.gmv
-            totals["orders"] += item.orders
-    lines = [f"# 广告月报 {month}", ""]
-    for platform, totals in sorted(platform_totals.items()):
-        label = PLATFORM_LABELS.get(platform, platform)
-        spend = totals["spend"]
-        gmv = totals["gmv"]
-        roas = "不可计算" if not spend else f"{gmv / spend:.2f}"
-        lines.append(
-            f"- {label}：消耗 {spend:.2f} / GMV {gmv:.2f} / "
-            f"ROAS {roas} / 订单 {totals['orders']}"
+
+def render_monthly_markdown(database: Database, year: int, month: int) -> str:
+    """生成月报 markdown。
+
+    调用 ReportReadModel.monthly() 获取聚合数据，渲染为可读的 Markdown 报告。
+    """
+    read_model = ReportReadModel(database)
+    data = read_model.monthly(year, month)
+    t = data["totals"]
+    mom = data["mom"]
+
+    lines = [
+        f"# 广告月报｜{year}年{month:02d}月",
+        "",
+        "## 本周汇总",
+        "| 指标 | 本月 | 环比 |",
+        "|------|------|------|",
+        (
+            f"| 广告消耗 | {_cny(t['ad_spend_cny'])} "
+            f"| {_format_mom(mom['spend'])} |"
+        ),
+        (
+            f"| GMV | {_cny(t['gmv'])} "
+            f"| {_format_mom(mom['gmv'])} |"
+        ),
+        (
+            f"| 净利润 | {_cny(t['net_profit'])} "
+            f"| {_format_mom(mom['net_profit'])} |"
+        ),
+        "",
+        "## 经营总览",
+        "| 项目 | 金额(CNY) | 占比 |",
+        "|------|----------|------|",
+    ]
+
+    sales = t.get("attributed_sales_cny")
+    if sales is not None and sales > 0:
+        fee = t.get("platform_fee_cny", Decimal(0))
+        ad = t.get("ad_spend_cny", Decimal(0))
+        sku = t.get("sku_and_other_cost_cny", Decimal(0))
+        profit = t.get("net_profit", Decimal(0))
+        if fee is None:
+            fee = Decimal(0)
+        if ad is None:
+            ad = Decimal(0)
+        if sku is None:
+            sku = Decimal(0)
+        if profit is None:
+            profit = Decimal(0)
+
+        lines.append(f"| 销售收入 | {_cny(sales)} | 100% |")
+        lines.append(f"| 平台佣金 | {_cny(fee)} | {_pct(fee, sales)} |")
+        lines.append(f"| SKU 成本及其他 | {_cny(sku)} | {_pct(sku, sales)} |")
+        lines.append(f"| 广告费用 | {_cny(ad)} | {_pct(ad, sales)} |")
+        lines.append(f"| 净利润 | {_cny(profit)} | {_pct(profit, sales)} |")
+    else:
+        lines.append("| 销售收入 | 待补数据 | - |")
+
+    lines.extend([
+        "",
+        "## 平台表现",
+    ])
+    for p in data["platforms"]:
+        label = PLATFORM_LABELS.get(p["platform"], p["platform"])
+        roas = "不可计算" if p["roas"] is None else f"{p['roas']:.2f}"
+        profit = (
+            "利润待补数据"
+            if p["net_profit"] is None
+            else f"净利润 {_cny(p['net_profit'])}"
         )
+        lines.append(
+            f"- {label}：消耗 {p['spend']:.2f} / GMV {p['gmv']:.2f} / "
+            f"ROAS {roas} / 订单 {p['orders']} / {profit}"
+        )
+
+    lines.extend([
+        "",
+        "## 每周趋势",
+        "| 周起始 | 消耗 | GMV | 利润 |",
+        "|--------|------|-----|------|",
+    ])
+    for point in data["weekly_trends"]:
+        profit_str = (
+            _cny(point.net_profit)
+            if point.net_profit is not None
+            else "待补数据"
+        )
+        lines.append(
+            f"| {point.data_date.isoformat()} | "
+            f"{point.spend:.2f} | {point.gmv:.2f} | {profit_str} |"
+        )
+
+    lines.extend([
+        "",
+        "## 费用明细",
+        "| 类别 | 金额(CNY) |",
+        "|------|----------|",
+    ])
+    if data["expenses"]:
+        for expense in data["expenses"]:
+            lines.append(
+                f"| {expense['category']} | {_cny(expense['amount_cny'])} |"
+            )
+    else:
+        lines.append("| 暂无费用数据 | - |")
+
+    lines.extend([
+        "",
+        "## 异常告警",
+    ])
+    if data["alerts"]:
+        for severity, count in sorted(data["alerts"].items()):
+            lines.append(
+                f"- [{_severity_label(severity)}]：共 {count} 次"
+            )
+    else:
+        lines.append("- 暂无异常告警")
+
+    lines.extend([
+        "",
+        "## 策略建议",
+    ])
+    if data["recommendations"]:
+        for action, count in sorted(data["recommendations"].items()):
+            lines.append(f"- {_action_label(action)}：{count} 条")
+    else:
+        lines.append("- 暂无建议")
+
+    lines.extend([
+        "",
+        "## 保本分析",
+    ])
+    be = data["break_even"]
+    lines.append(
+        f"- 月均保本 ROAS：{be['avg_break_even_roas']:.2f}"
+        if be["avg_break_even_roas"] is not None
+        else "- 月均保本 ROAS：待补数据"
+    )
+    lines.append(f"- 健康商品：{be['healthy_skus']} 个")
+    lines.append(f"- 亏损商品：{be['losing_skus']} 个")
+
     return "\n".join(lines)

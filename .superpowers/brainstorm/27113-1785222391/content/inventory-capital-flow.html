@@ -1,0 +1,58 @@
+<h2>新版闭环：资金、库存、利润三本账相互对账</h2>
+<p class="subtitle">三个视角分别回答“钱在哪里、货在哪里、经营是否赚钱”。</p>
+
+<div class="mockup">
+  <div class="mockup-header">业务流与会计口径</div>
+  <div class="mockup-body">
+    <div style="display:grid;grid-template-columns:1fr auto 1fr auto 1fr;gap:12px;align-items:center">
+      <div style="padding:16px;background:#ede9fe;border-radius:10px">
+        <div class="label">合伙人资金</div>
+        <h3>各实缴 50%</h3>
+        <p>认缴、实缴、代垫、提款、待补差额</p>
+      </div>
+      <div style="font-size:26px">→</div>
+      <div style="padding:16px;background:#dbeafe;border-radius:10px">
+        <div class="label">进货入库</div>
+        <h3>现金减少 / 库存增加</h3>
+        <p>采购批次、SKU、数量、到岸单位成本</p>
+      </div>
+      <div style="font-size:26px">→</div>
+      <div style="padding:16px;background:#dcfce7;border-radius:10px">
+        <div class="label">订单出库</div>
+        <h3>库存减少 / 成本结转</h3>
+        <p>按订单与 SKU 自动匹配数量和单位成本</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="cards" style="margin-top:22px">
+  <div class="card">
+    <div class="card-body">
+      <h3>现金账</h3>
+      <p>实缴 + 销售回款 − 采购付款 − 广告充值 − 费用 − 提款</p>
+    </div>
+  </div>
+  <div class="card">
+    <div class="card-body">
+      <h3>库存账</h3>
+      <p>期初 + 入库 − 出库 + 销售退回 − 报损 = 期末库存</p>
+    </div>
+  </div>
+  <div class="card">
+    <div class="card-body">
+      <h3>利润账</h3>
+      <p>净销售收入 − 已售商品成本 − 平台费 − 广告费 − 经营费用</p>
+    </div>
+  </div>
+</div>
+
+<div class="section" style="margin-top:22px">
+  <h3>关键控制</h3>
+  <ul>
+    <li>采购付款不直接扣利润；货卖出时才结转成本。</li>
+    <li>每笔进货最终可追踪到库存余额、订单出库或报损。</li>
+    <li>实缴目标按 50% / 50% 对账；谁代垫、谁少缴都单独显示。</li>
+    <li>取消订单不出库；退款退货根据物流结果决定重新入库或计损。</li>
+  </ul>
+</div>

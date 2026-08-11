@@ -304,7 +304,7 @@ git commit -m "feat: expose semi-automatic cost workflow"
 
 **Files:**
 - Modify: `README.md`
-- Modify: `docs/blueprint-gap-audit-2026-07-27.md`
+- Modify: `docs/blueprint/blueprint-gap-audit-2026-07-27.md`
 
 - [ ] **Step 1: 更新用户工作流文档**
 
@@ -323,7 +323,7 @@ Expected: 无错误。
 - [ ] **Step 3: 提交文档**
 
 ```bash
-git add README.md docs/blueprint-gap-audit-2026-07-27.md
+git add README.md docs/blueprint/blueprint-gap-audit-2026-07-27.md
 git commit -m "docs: explain semi-automatic SKU costing"
 ```
 

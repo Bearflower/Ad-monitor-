@@ -9,6 +9,7 @@ description = "TikTok and Shopee advertising operations automation"
 requires-python = ">=3.11"
 dependencies = [
   "openpyxl>=3.1,<4",
+  "pypdf>=6,<7",
 ]
 
 [project.optional-dependencies]

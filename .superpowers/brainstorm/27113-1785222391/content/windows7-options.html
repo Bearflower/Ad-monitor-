@@ -1,0 +1,45 @@
+<h2>Windows 7 兼容路径评估</h2>
+<p class="subtitle">目标是保持系统可靠、安全，并避免为了旧系统牺牲紫鸟 CLI 和分析能力。</p>
+
+<div class="cards">
+  <div class="card" data-choice="a" onclick="toggleSelect(this)" style="border:2px solid #16a34a">
+    <div class="card-body">
+      <div class="label">推荐 A</div>
+      <h3>Mac 作为主机，Win7 只访问网页</h3>
+      <p>SQLite、紫鸟 CLI、定时任务和分析都留在 Mac。Win7 通过局域网打开 Web 前端，进行费用、出资、提款、成本与分润维护。</p>
+      <p><strong>改造量：</strong>小</p>
+      <p><strong>风险：</strong>Win7 浏览器本身已过时，只适合受控内网。</p>
+    </div>
+  </div>
+
+  <div class="card" data-choice="b" onclick="toggleSelect(this)">
+    <div class="card-body">
+      <div class="label">可行 B</div>
+      <h3>升级 Windows 后整体迁移</h3>
+      <p>先把机器升级到受支持的 Windows 10/11，再适配路径、任务计划程序、服务管理、安装包、备份与防火墙。</p>
+      <p><strong>改造量：</strong>中等</p>
+      <p><strong>优势：</strong>可以成为新的完整主机。</p>
+    </div>
+  </div>
+
+  <div class="card" data-choice="c" onclick="toggleSelect(this)">
+    <div class="card-body">
+      <div class="label">不推荐 C</div>
+      <h3>强行让完整系统运行在 Win7</h3>
+      <p>需把 Python 3.11 代码回退到 3.8、重写类型语法，寻找非官方 Node 版本，并绕开紫鸟 CLI 的 Node ≥18 要求。</p>
+      <p><strong>改造量：</strong>大</p>
+      <p><strong>风险：</strong>安全、TLS、浏览器、依赖和紫鸟升级随时失效。</p>
+    </div>
+  </div>
+</div>
+
+<div class="section" style="margin-top:22px">
+  <h3>如果迁移到受支持 Windows，需要的正式改造</h3>
+  <ul>
+    <li>把 macOS launchd 调度替换成 Windows Task Scheduler 或 Windows Service。</li>
+    <li>消除 /Users、.venv/bin、Library/Application Support 等 Mac 固定路径。</li>
+    <li>增加 Windows 路径、进程、字符编码、文件锁和防火墙测试。</li>
+    <li>制作 PowerShell 安装/升级/备份脚本，并验证紫鸟浏览器与 CLI。</li>
+    <li>为 SQLite 增加单实例写入、自动备份和异常恢复。</li>
+  </ul>
+</div>

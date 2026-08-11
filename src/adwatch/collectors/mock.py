@@ -35,7 +35,7 @@ class MockCollector:
                     store=store,
                     account_id=f"{self.platform.value}-account-1",
                     campaign_id=f"{self.platform.value}-campaign-{index}",
-                    sku_id=f"SKU-{index:03d}",
+                    sku_id=f"{self.platform.value.upper()}-SKU-{index:03d}",
                     data_date=data_date,
                     currency=currency,
                     spend=spend,

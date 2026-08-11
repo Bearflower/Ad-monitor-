@@ -87,7 +87,7 @@ Expected: all tests pass.
 **Files:**
 - Modify if required by failing safety test: `src/adwatch/strategy/rules.py`
 - Test: `tests/strategy/test_rules.py`
-- Update: `docs/superpowers/specs/2026-07-29-break-even-target-report-design.md`
+- Update: `docs/design/2026-07-29-break-even-target-report-design.md`
 
 - [ ] **Step 1: Verify no automatic budget increase is derived from the report target**
 

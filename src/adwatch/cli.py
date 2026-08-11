@@ -1,11 +1,12 @@
 import argparse
-import calendar
 import csv
 import json
 import shutil
-from datetime import date, datetime, timedelta
-from html import escape
+import uuid
+from datetime import UTC, date, datetime, timedelta
+from decimal import Decimal
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from adwatch.analytics.business_inputs import (
     BusinessInputError,
@@ -18,6 +19,7 @@ from adwatch.analytics.order_costs import (
     map_store,
     order_cost_summary,
 )
+from adwatch.analytics.recalculation import AnalysisRecalculationService
 from adwatch.analytics.service import AnalysisService
 from adwatch.analytics.sku_cost_workbook import (
     export_pending_sku_costs,
@@ -42,25 +44,44 @@ from adwatch.execution.policy import (
     PolicyError,
 )
 from adwatch.execution.ziniao_backend import ZiniaoExecutionBackend
+from adwatch.income.repository import FeeStatementRepository
+from adwatch.income.service import IncomeImportService
 from adwatch.integrations.exchange_rates import (
     EcbExchangeRateSource,
-    ensure_exchange_rate,
     sync_exchange_rates,
 )
+from adwatch.knowledge.repository import KnowledgeRepository
+from adwatch.knowledge.search import KnowledgeReadModel
+from adwatch.knowledge.service import KnowledgeService
+from adwatch.knowledge.sources import DEFAULT_SOURCES
 from adwatch.operations.backup import create_backup, verify_backup
+from adwatch.operations.daily_run import DailyRunService
 from adwatch.operations.launch_checklist import (
     LaunchReadiness,
     build_launch_checklist,
     render_launch_checklist,
 )
 from adwatch.operations.readiness import readiness_status
+from adwatch.operations.scheduled_daily import (
+    run_scheduled_daily,
+    run_scheduled_weekly,
+)
+from adwatch.operations.scheduler import (
+    ScheduleCommandError,
+    ScheduleManager,
+    render_launchd_plist,
+)
 from adwatch.orders.fulfillment import FulfillmentService
+from adwatch.orders.repository import OrderRepository
 from adwatch.orders.sync import OperationsSyncService
+from adwatch.orders.ziniao_sync import (
+    OrderSyncError,
+    ShopeeOrderSync,
+    ZiniaoShopeeReadClient,
+)
 from adwatch.pipeline.runner import PipelineRunner
 from adwatch.reconciliation.service import ReconciliationService
-from adwatch.reporting.delivery import deliver_report
 from adwatch.reporting.markdown import (
-    present_daily_report,
     render_daily_markdown,
     render_monthly_markdown,
     render_weekly_markdown,
@@ -136,7 +157,10 @@ def build_parser() -> argparse.ArgumentParser:
     seed = subcommands.add_parser("seed-business-data")
     seed.add_argument("--date", type=date.fromisoformat, default=local_today)
     analyze = subcommands.add_parser("analyze")
-    analyze.add_argument("--date", type=date.fromisoformat, default=local_today)
+    analyze.add_argument("--date", type=date.fromisoformat)
+    analyze.add_argument("--from", dest="start", type=date.fromisoformat)
+    analyze.add_argument("--to", dest="end", type=date.fromisoformat)
+    analyze.add_argument("--output", type=Path)
     business = subcommands.add_parser("business")
     business_commands = business.add_subparsers(dest="business_command")
     export_template = business_commands.add_parser("export-template")
@@ -203,6 +227,25 @@ def build_parser() -> argparse.ArgumentParser:
     bulk_fulfillment.add_argument("--platform", required=True)
     bulk_fulfillment.add_argument("--store", required=True)
     bulk_fulfillment.add_argument("--note", default="现有货盘SKU")
+    orders = subcommands.add_parser("orders")
+    order_commands = orders.add_subparsers(dest="order_command")
+    order_sync = order_commands.add_parser("sync")
+    order_sync.add_argument("--platform", choices=("shopee",), required=True)
+    order_sync.add_argument(
+        "--from", dest="start", type=date.fromisoformat, required=True
+    )
+    order_sync.add_argument(
+        "--to", dest="end", type=date.fromisoformat, required=True
+    )
+    income = subcommands.add_parser("income")
+    income_commands = income.add_subparsers(dest="income_command")
+    income_import = income_commands.add_parser("import")
+    income_import.add_argument("--file", type=Path, required=True)
+    income_import.add_argument(
+        "--platform", choices=("shopee", "tiktok"), required=True
+    )
+    income_commands.add_parser("scan")
+    income_commands.add_parser("list")
     run = subcommands.add_parser("run")
     workflows = run.add_subparsers(dest="workflow")
     daily = workflows.add_parser("daily")
@@ -210,10 +253,17 @@ def build_parser() -> argparse.ArgumentParser:
     daily.add_argument(
         "--date",
         type=date.fromisoformat,
-        default=local_today - timedelta(days=1),
     )
+    daily.add_argument("--no-notify", action="store_true")
+    workflows.add_parser("scheduled-daily")
+    workflows.add_parser("scheduled-weekly")
     schedule = subcommands.add_parser("schedule")
     schedule.add_argument("--print-launchd", action="store_true")
+    schedule_commands = schedule.add_subparsers(dest="schedule_command")
+    schedule_commands.add_parser("install")
+    schedule_commands.add_parser("status")
+    schedule_commands.add_parser("repair")
+    schedule_commands.add_parser("uninstall")
     dashboard = subcommands.add_parser("dashboard")
     dashboard.add_argument("--host", default="127.0.0.1")
     dashboard.add_argument("--port", type=int, default=8765)
@@ -247,6 +297,24 @@ def build_parser() -> argparse.ArgumentParser:
     strategy_replay.add_argument(
         "--to", dest="end", type=date.fromisoformat, required=True
     )
+    knowledge = subcommands.add_parser("knowledge")
+    knowledge_commands = knowledge.add_subparsers(dest="knowledge_command")
+    knowledge_search = knowledge_commands.add_parser("search")
+    knowledge_search.add_argument("query")
+    knowledge_search.add_argument("--limit", type=int, default=20)
+    knowledge_search.add_argument(
+        "--format", choices=("json", "table"), default="table"
+    )
+    knowledge_show = knowledge_commands.add_parser("show")
+    knowledge_show.add_argument("document_id")
+    knowledge_show.add_argument(
+        "--format", choices=("json", "table"), default="table"
+    )
+    knowledge_commands.add_parser("status")
+    knowledge_commands.add_parser("bootstrap")
+    knowledge_commands.add_parser("update")
+    knowledge_commands.add_parser("enrich")
+    knowledge_commands.add_parser("reindex")
     return parser
 
 
@@ -265,6 +333,93 @@ def main(argv: list[str] | None = None) -> int:
         settings.report_dir.mkdir(parents=True, exist_ok=True)
         database.migrate()
         print(f"Database initialized: {settings.database_path}")
+        return 0
+    if args.command == "income":
+        database.migrate()
+        if args.income_command == "import":
+            if args.platform == "tiktok":
+                print("income_import=pending_external platform=tiktok")
+                return 2
+            result = IncomeImportService(
+                database,
+                scan_root=settings.income_scan_root,
+            ).import_file(
+                args.file,
+                platform=args.platform,
+                retry_terminal=True,
+            )
+            statement = result.statement
+            if statement is None:
+                print(
+                    f"income_import={result.status} "
+                    f"platform={args.platform} reason={result.reason_code}"
+                )
+            else:
+                print(
+                    f"income_import={result.status} "
+                    f"platform={statement.platform} store={statement.store} "
+                    f"period={statement.period_start.isoformat()}.."
+                    f"{statement.period_end.isoformat()} "
+                    f"rate={statement.effective_rate * 100:.4f}% "
+                    f"source={statement.source_name} "
+                    f"sha={statement.source_sha256[:12]}"
+                )
+            return 0 if result.status in {"imported", "revised", "skipped"} else 2
+        if args.income_command == "scan":
+            result = IncomeImportService(
+                database,
+                scan_root=settings.income_scan_root,
+            ).scan()
+            status = "partial" if result.quarantined or result.failed else "ok"
+            print(
+                f"income_scan={status} discovered={result.discovered} "
+                f"imported={result.imported} revised={result.revised} "
+                f"skipped={result.skipped} "
+                f"quarantined={result.quarantined} failed={result.failed}"
+            )
+            return 2 if status == "partial" else 0
+        if args.income_command == "list":
+            for row in FeeStatementRepository(database).list_current():
+                print(
+                    f"{row['platform']} {row['store']} "
+                    f"{row['period_start']}..{row['period_end']} "
+                    f"rate={Decimal(row['effective_rate']) * 100:.4f}% "
+                    f"source={row['source_name']} "
+                    f"sha={str(row['source_sha256'])[:12]} "
+                    f"version={row['version']}"
+                )
+            return 0
+        parser.print_help()
+        return 2
+    if args.command == "orders":
+        if args.order_command != "sync":
+            parser.print_help()
+            return 2
+        database.migrate()
+        if not settings.ziniao_shopee_store_id:
+            print("ZINIAO_SHOPEE_STORE_ID is required")
+            return 2
+        try:
+            result = ShopeeOrderSync(
+                OrderRepository(database),
+                ZiniaoShopeeReadClient(
+                    ZiniaoCliClient(),
+                    settings.ziniao_shopee_store_id,
+                ),
+                store=settings.ziniao_shopee_store_name,
+                timezone=settings.timezone,
+            ).sync(start=args.start, end=args.end)
+        except (OrderSyncError, ValueError) as error:
+            print(f"order_sync=failed error={error}")
+            return 2
+        print(
+            f"order_sync={result.status} "
+            f"orders={result.order_count} skus={result.sku_count} "
+            f"rejected={result.rejected_count} "
+            f"refunds={result.refund_count} "
+            f"logistics={result.logistics_count} "
+            f"inventory_snapshots={result.inventory_snapshot_count}"
+        )
         return 0
     if args.command == "doctor":
         print(f"SQLite: {settings.database_path}")
@@ -476,7 +631,15 @@ def main(argv: list[str] | None = None) -> int:
                 and has_three_day_reconciliation
             ),
         )
-        items = build_launch_checklist(readiness)
+        excluded_codes = (
+            frozenset()
+            if settings.tiktok_collection_enabled
+            else frozenset({"tiktok_campaign_validation"})
+        )
+        items = build_launch_checklist(
+            readiness,
+            excluded_codes=excluded_codes,
+        )
         if args.format == "json":
             print(
                 json.dumps(
@@ -559,6 +722,217 @@ def main(argv: list[str] | None = None) -> int:
             return 0 if result.status == "matched" else 2
         parser.print_help()
         return 2
+    if args.command == "knowledge":
+        database.migrate()
+        read_model = KnowledgeReadModel(database)
+        try:
+            if args.knowledge_command == "search":
+                results = read_model.search(args.query, limit=args.limit)
+                if args.format == "json":
+                    print(
+                        json.dumps(
+                            {"ok": True, "results": results},
+                            ensure_ascii=False,
+                        )
+                    )
+                else:
+                    for item in results:
+                        print(
+                            f"{item['document_id']} "
+                            f"{item.get('title_zh') or item['title_original']} "
+                            f"{item['canonical_url']}"
+                        )
+                return 0
+            if args.knowledge_command == "show":
+                detail = read_model.document(args.document_id)
+                print(
+                    json.dumps(
+                        {"ok": True, "document": detail},
+                        ensure_ascii=False,
+                    )
+                    if args.format == "json"
+                    else detail["content_original"]
+                )
+                return 0
+            if args.knowledge_command == "status":
+                print(
+                    json.dumps(
+                        {"ok": True, **read_model.status()},
+                        ensure_ascii=False,
+                    )
+                )
+                return 0
+            if args.knowledge_command in {"bootstrap", "update"}:
+                if not settings.ziniao_shopee_store_id:
+                    print("ZINIAO_SHOPEE_STORE_ID is required")
+                    return 2
+                service = KnowledgeService(
+                    KnowledgeRepository(database),
+                    ZiniaoCliClient(),
+                    store_id=settings.ziniao_shopee_store_id,
+                    store_ids={
+                        "tiktok_shop_th_help": (
+                            settings.ziniao_tiktok_store_id
+                        ),
+                    },
+                    sources=DEFAULT_SOURCES,
+                    request_delay_ms=settings.knowledge_request_delay_ms,
+                    max_pages=settings.knowledge_max_pages_per_run,
+                )
+                summary = (
+                    service.bootstrap()
+                    if args.knowledge_command == "bootstrap"
+                    else service.update()
+                )
+                print(
+                    f"knowledge_status={summary.status} "
+                    f"fetched={summary.fetched} new={summary.new} "
+                    f"updated={summary.updated} failed={summary.failed} "
+                    f"errors={','.join(summary.errors)}"
+                )
+                return 0
+            if args.knowledge_command == "enrich":
+                if not settings.openai_api_key:
+                    print("OPENAI_API_KEY is required for enrichment")
+                    return 2
+                from adwatch.knowledge.enrichment import OpenAIEnricher
+                from adwatch.knowledge.models import ExtractedDocument
+
+                with database.connect() as connection:
+                    pending = connection.execute(
+                        """
+                        SELECT v.id AS version_id, v.document_id,
+                               v.title_original, v.content_original,
+                               v.language, v.content_format,
+                               d.canonical_url, d.document_type,
+                               d.published_at, d.remote_updated_at
+                        FROM knowledge_enrichments e
+                        JOIN knowledge_document_versions v
+                          ON v.id=e.version_id
+                        JOIN knowledge_documents d
+                          ON d.id=v.document_id
+                        WHERE e.status='pending'
+                        ORDER BY d.published_at DESC
+                        """
+                    ).fetchall()
+                if not pending:
+                    print("No pending enrichments found.")
+                    return 0
+                enricher = OpenAIEnricher(
+                    api_key=settings.openai_api_key,
+                    model=settings.knowledge_model,
+                    enabled=settings.knowledge_enrichment,
+                )
+                enriched = 0
+                skipped = 0
+                failed = 0
+                for row in pending:
+                    doc = ExtractedDocument(
+                        canonical_url=str(row["canonical_url"]),
+                        document_type=str(row["document_type"]),
+                        title_original=str(row["title_original"]),
+                        language=str(row["language"]),
+                        content_original=str(row["content_original"]),
+                        published_at=str(row["published_at"] or ""),
+                        remote_updated_at=str(row["remote_updated_at"] or ""),
+                        metadata={},
+                        content_format=str(row["content_format"]),
+                    )
+                    try:
+                        result = enricher.enrich(doc)
+                        now = datetime.now(UTC).isoformat()
+                        with database.transaction() as connection:
+                            connection.execute(
+                                """
+                                UPDATE knowledge_enrichments
+                                SET status=?, title_zh=?, summary_zh=?,
+                                    category=?, tags_json=?,
+                                    key_rules_json=?, model=?,
+                                    response_id=?, updated_at=?
+                                WHERE version_id=?
+                                """,
+                                (
+                                    result.status,
+                                    result.title_zh,
+                                    result.summary_zh,
+                                    result.category,
+                                    json.dumps(list(result.tags)),
+                                    json.dumps(list(result.key_rules)),
+                                    result.model,
+                                    result.response_id,
+                                    now,
+                                    row["version_id"],
+                                ),
+                            )
+                        if result.status == "completed":
+                            enriched += 1
+                        else:
+                            skipped += 1
+                    except Exception as error:  # noqa: BLE001 - 每篇知识文档独立隔离
+                        failed += 1
+                        now = datetime.now(UTC).isoformat()
+                        with database.transaction() as connection:
+                            connection.execute(
+                                """
+                                UPDATE knowledge_enrichments
+                                SET status='failed', error_code=?,
+                                    error_message=?, updated_at=?
+                                WHERE version_id=?
+                                """,
+                                (
+                                    type(error).__name__,
+                                    str(error)[:500],
+                                    now,
+                                    row["version_id"],
+                                ),
+                            )
+                    print(
+                        f"  [{row['document_id'][:8]}] "
+                        f"{result.title_zh[:50] if result.status == 'completed' else result.status}"
+                    )
+                print(
+                    f"enrichment: enriched={enriched} skipped={skipped} "
+                    f"failed={failed}"
+                )
+                return 0
+            if args.knowledge_command == "reindex":
+                with database.transaction() as connection:
+                    connection.execute("DELETE FROM knowledge_fts")
+                    rows = connection.execute(
+                        """
+                        SELECT v.id, v.document_id, v.title_original,
+                               v.content_original
+                        FROM knowledge_document_versions v
+                        JOIN knowledge_documents d
+                          ON d.current_version_id=v.id
+                        """
+                    ).fetchall()
+                    for row in rows:
+                        chunk_id = str(uuid.uuid4())
+                        connection.execute(
+                            """
+                            INSERT INTO knowledge_fts(
+                                chunk_id, document_id, version_id,
+                                title_original, content_original
+                            ) VALUES (?, ?, ?, ?, ?)
+                            """,
+                            (
+                                chunk_id,
+                                row["document_id"],
+                                row["id"],
+                                row["title_original"],
+                                row["content_original"],
+                            ),
+                        )
+                print(f"reindex: {len(rows)} documents rebuilt")
+                return 0
+            print(
+                "Knowledge command is not available in this build."
+            )
+            return 2
+        except (KeyError, ValueError) as error:
+            print(f"Knowledge query rejected: {error}")
+            return 2
     if args.command == "approval":
         database.migrate()
         if args.approval_command == "serve":
@@ -685,32 +1059,17 @@ def main(argv: list[str] | None = None) -> int:
             try:
                 year_text, month_text = args.month.split("-", 1)
                 year, month_number = int(year_text), int(month_text)
-                days = calendar.monthrange(year, month_number)[1]
             except (ValueError, IndexError):
                 print("Month must use YYYY-MM format")
                 return 2
-            read_model = ReportReadModel(database)
-            snapshots = [
-                read_model.daily(date(year, month_number, day))
-                for day in range(1, days + 1)
-            ]
-            snapshots = [item for item in snapshots if item.platforms]
-            markdown = render_monthly_markdown(
-                snapshots, month=args.month
-            )
+            markdown = render_monthly_markdown(database, year, month_number)
             destination = settings.report_dir / f"monthly-{args.month}.md"
             destination.parent.mkdir(parents=True, exist_ok=True)
             destination.write_text(markdown, encoding="utf-8")
             print(f"Monthly report: {destination}")
             return 0
         if args.report_command == "weekly":
-            read_model = ReportReadModel(database)
-            snapshots = [
-                read_model.daily(args.end - timedelta(days=offset))
-                for offset in range(6, -1, -1)
-            ]
-            snapshots = [item for item in snapshots if item.platforms]
-            markdown = render_weekly_markdown(snapshots)
+            markdown = render_weekly_markdown(database, args.end)
             destination = (
                 settings.report_dir / f"weekly-{args.end.isoformat()}.md"
             )
@@ -746,7 +1105,49 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.command == "analyze":
         database.migrate()
-        summary = AnalysisService(database).run(args.date)
+        has_range = args.start is not None or args.end is not None
+        if args.date is not None and has_range:
+            print("analyze requires either --date or --from/--to")
+            return 2
+        if (args.start is None) != (args.end is None):
+            print("analyze range requires both --from and --to")
+            return 2
+        if args.output is not None and not has_range:
+            print("analyze --output requires --from/--to")
+            return 2
+        if args.start is not None and args.start > args.end:
+            print("analyze start date must not be after end date")
+            return 2
+        if args.start is not None:
+            destination = args.output or (
+                settings.report_dir
+                / (
+                    "profit-recalculation-"
+                    f"{args.start.isoformat()}-{args.end.isoformat()}.json"
+                )
+            )
+            result = AnalysisRecalculationService(database).run(
+                start=args.start,
+                end=args.end,
+                destination=destination,
+            )
+            profit_diff = result.differences["profit_results"]
+            lineage_diff = result.differences["input_lineage"]
+            print(
+                f"days={result.days_processed} "
+                f"metrics={result.metrics_processed} "
+                f"profit_results={result.profit_results} "
+                f"pending_data={result.pending_data} "
+                f"profit_added={profit_diff['added']} "
+                f"profit_changed={profit_diff['changed']} "
+                f"profit_unchanged={profit_diff['unchanged']} "
+                f"profit_removed={profit_diff['removed']} "
+                f"lineage_changed={lineage_diff['changed']} "
+                f"report={destination}"
+            )
+            return 0
+        data_date = args.date or datetime.now().astimezone().date()
+        summary = AnalysisService(database).run(data_date)
         print(
             f"metrics={summary.metrics_processed} "
             f"profit_results={summary.profit_results} "
@@ -833,6 +1234,7 @@ def main(argv: list[str] | None = None) -> int:
                     f"pending_cost={result.pending_cost} "
                     f"pending_fulfillment={result.pending_fulfillment} "
                     f"pending_inventory={result.pending_inventory} "
+                    f"pending_order_identity={result.pending_order_identity} "
                     f"unchanged={result.unchanged}"
                 )
                 return (
@@ -841,6 +1243,7 @@ def main(argv: list[str] | None = None) -> int:
                         result.pending_cost
                         or result.pending_fulfillment
                         or result.pending_inventory
+                        or result.pending_order_identity
                     )
                     else 0
                 )
@@ -897,8 +1300,54 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     if args.command == "schedule":
         if args.print_launchd:
-            print(render_launchd_plist(Path.cwd()))
-        return 0
+            print(render_launchd_plist(Path.cwd(), settings))
+            return 0
+        if args.schedule_command is None:
+            parser.print_help()
+            return 2
+        manager = ScheduleManager(
+            project_dir=Path.cwd(),
+            settings=settings,
+        )
+        try:
+            if args.schedule_command == "install":
+                status = manager.install()
+                print(
+                    f"schedule=installed "
+                    f"healthy={str(status.healthy).lower()} "
+                    f"project={status.project_dir} "
+                    f"time={settings.daily_run_time}"
+                )
+            elif args.schedule_command == "repair":
+                status = manager.repair()
+                print(
+                    f"schedule=repaired "
+                    f"healthy={str(status.healthy).lower()} "
+                    f"project={status.project_dir} "
+                    f"time={settings.daily_run_time}"
+                )
+            elif args.schedule_command == "uninstall":
+                status = manager.uninstall()
+                unrecognized = "unrecognized_plist" in status.issues
+                print(
+                    f"schedule=uninstalled "
+                    f"success={str(not unrecognized).lower()}"
+                )
+                return 2 if unrecognized else 0
+            else:
+                status = manager.status()
+                health = "healthy" if status.healthy else "unhealthy"
+                print(
+                    f"schedule={health} "
+                    f"loaded={str(status.loaded).lower()} "
+                    f"enabled={str(status.enabled).lower()}"
+                )
+                if status.issues:
+                    print(f"issues={','.join(status.issues)}")
+            return 0 if status.healthy else 2
+        except ScheduleCommandError as error:
+            print(f"schedule=failed error={error}")
+            return 2
     if args.command == "dashboard":
         if args.host not in {"127.0.0.1", "localhost", "::1"} and not args.allow_remote:
             print("Remote dashboard binding requires --allow-remote")
@@ -916,86 +1365,31 @@ def main(argv: list[str] | None = None) -> int:
             port=args.port,
             default_date=dashboard_date,
             simulated=None,
+            evidence_root=settings.evidence_dir,
         )
         return 0
     if args.command == "run" and args.workflow == "daily":
-        database.migrate()
-        if args.mode == "ziniao" and not settings.ziniao_cli_ready:
-            print(
-                "Ziniao store IDs are not configured. Set "
-                "ZINIAO_TIKTOK_STORE_ID and ZINIAO_SHOPEE_STORE_ID."
-            )
-            return 2
-        if args.mode == "ziniao":
-            try:
-                exchange_rate = ensure_exchange_rate(
-                    database,
-                    EcbExchangeRateSource(),
-                    currency="THB",
-                    data_date=args.date,
-                )
-                print(
-                    f"exchange_rate={exchange_rate.status} "
-                    f"THB/CNY={exchange_rate.rate} "
-                    f"source_date={exchange_rate.source_date.isoformat()}"
-                )
-            except (OSError, ValueError) as error:
-                print(
-                    "exchange_rate=unavailable "
-                    f"error={type(error).__name__}: {error}"
-                )
-        collector_type = (
-            MockCollector if args.mode == "mock" else ZiniaoCollector
+        execution_date = datetime.now(
+            ZoneInfo(settings.timezone)
+        ).date()
+        report_date = args.date or execution_date - timedelta(days=1)
+        result = DailyRunService.from_settings(
+            settings,
+            database=database,
+        ).run(
+            execution_date=execution_date,
+            report_date=report_date,
+            mode=args.mode,
+            notify=not args.no_notify,
         )
-        runner = PipelineRunner(database)
-        summaries = []
-        collection_errors = []
-        for platform in (Platform.TIKTOK, Platform.SHOPEE):
-            collector = (
-                collector_type(platform)
-                if args.mode == "mock"
-                else collector_type(settings, platform)
-            )
-            try:
-                summaries.append(runner.run(collector, args.date))
-            except Exception as error:  # noqa: BLE001 - isolate each platform
-                collection_errors.append((platform.value, error))
-                print(
-                    f"{platform.value} collection failed: "
-                    f"{type(error).__name__}: {error}"
-                )
-        write_quality_report(
-            settings.report_dir, args.date, args.mode, summaries
-        )
-        order_sync = OperationsSyncService(database).sync()
-        analysis = AnalysisService(database)
-        if args.mode == "mock":
-            analysis.seed_mock_business_data(args.date)
-        analysis_summary = analysis.run(args.date)
-        presentation = present_daily_report(
-            ReportReadModel(database).daily(args.date),
-            simulated=args.mode == "mock",
-        )
-        delivery = deliver_report(
-            presentation.markdown,
-            data_date=args.date,
-            report_dir=settings.report_dir,
-            webhook_url=settings.feishu_webhook,
-            header_template=presentation.header_template,
-            risk_label=presentation.risk_label,
-        )
-        run_status = "partial" if collection_errors else "ok"
-        print(
-            f"daily_run={run_status} metrics={analysis_summary.metrics_processed} "
-            f"recommendations={analysis_summary.recommendations} "
-            f"orders_shipped={order_sync.shipped} "
-            f"orders_supplier_costed={order_sync.supplier_costed} "
-            f"orders_pending_cost={order_sync.pending_cost} "
-            f"orders_pending_fulfillment="
-            f"{order_sync.pending_fulfillment} "
-            f"delivery={delivery.status} report={delivery.path}"
-        )
-        return 2 if collection_errors else 0
+        for message in result.messages:
+            print(message)
+        print(result.summary_line())
+        return result.exit_code
+    if args.command == "run" and args.workflow == "scheduled-daily":
+        return run_scheduled_daily(settings)
+    if args.command == "run" and args.workflow == "scheduled-weekly":
+        return run_scheduled_weekly(settings)
     if args.command == "collect":
         database.migrate()
         if args.mode == "mock":
@@ -1005,14 +1399,11 @@ def main(argv: list[str] | None = None) -> int:
             ]
         else:
             if not settings.ziniao_cli_ready:
-                print(
-                    "Ziniao store IDs are not configured. Set "
-                    "ZINIAO_TIKTOK_STORE_ID and ZINIAO_SHOPEE_STORE_ID."
-                )
+                print("已启用的紫鸟平台店铺 ID 未配置。")
                 return 2
             collectors = [
-                ZiniaoCollector(settings, Platform.TIKTOK),
-                ZiniaoCollector(settings, Platform.SHOPEE),
+                ZiniaoCollector(settings, Platform(platform))
+                for platform in settings.enabled_ziniao_platforms
             ]
         runner = PipelineRunner(database)
         try:
@@ -1049,32 +1440,3 @@ def _ziniao_bridge_ready() -> bool:
         return True
     except (OSError, ZiniaoApiError):
         return False
-
-
-def render_launchd_plist(project_dir: Path) -> str:
-    executable = project_dir / ".venv" / "bin" / "adwatch"
-    stdout = project_dir / "var" / "logs" / "launchd.out.log"
-    stderr = project_dir / "var" / "logs" / "launchd.err.log"
-    return (
-        '<?xml version="1.0" encoding="UTF-8"?>\n'
-        '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" '
-        '"http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n'
-        '<plist version="1.0"><dict>'
-        "<key>Label</key><string>com.adwatch.daily</string>"
-        "<key>ProgramArguments</key><array>"
-        f"<string>{escape(str(executable))}</string>"
-        "<string>run</string><string>daily</string>"
-        "<string>--mode</string><string>ziniao</string></array>"
-        f"<key>WorkingDirectory</key><string>{escape(str(project_dir))}</string>"
-        "<key>EnvironmentVariables</key><dict>"
-        "<key>PATH</key>"
-        "<string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>"
-        "</dict>"
-        f"<key>StandardOutPath</key><string>{escape(str(stdout))}</string>"
-        f"<key>StandardErrorPath</key><string>{escape(str(stderr))}</string>"
-        "<key>StartCalendarInterval</key><dict>"
-        "<key>Hour</key><integer>8</integer>"
-        "<key>Minute</key><integer>0</integer>"
-        "</dict><key>RunAtLoad</key><false/>"
-        "</dict></plist>"
-    )

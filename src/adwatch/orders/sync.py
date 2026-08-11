@@ -7,6 +7,7 @@ from decimal import Decimal
 from adwatch.inventory.service import InventoryError, InventoryService
 from adwatch.orders.fulfillment import FulfillmentService
 from adwatch.storage.db import Database
+from adwatch.storage.store_aliases import equivalent_store_names
 
 
 @dataclass(frozen=True)
@@ -17,6 +18,7 @@ class OperationsSyncResult:
     pending_cost: int = 0
     pending_inventory: int = 0
     pending_fulfillment: int = 0
+    pending_order_identity: int = 0
     supplier_costed: int = 0
     unchanged: int = 0
 
@@ -46,10 +48,14 @@ class OperationsSyncService:
             "pending_cost": 0,
             "pending_inventory": 0,
             "pending_fulfillment": 0,
+            "pending_order_identity": 0,
             "supplier_costed": 0,
             "unchanged": 0,
         }
         for row in self._order_lines():
+            if row["resolution_status"] != "ready":
+                counts["pending_order_identity"] += 1
+                continue
             order_status = row["order_status"].strip().lower()
             logistics_status = row["logistics_status"].strip().lower()
             refund_status = row["refund_status"].strip().lower()
@@ -106,12 +112,6 @@ class OperationsSyncService:
                 else:
                     counts["unchanged"] += 1
                 continue
-            if (
-                order_status not in self._FULFILLED
-                and logistics_status not in self._FULFILLED
-            ):
-                counts["unchanged"] += 1
-                continue
             cost = self._cost_for(
                 row["platform"],
                 row["store"],
@@ -135,6 +135,12 @@ class OperationsSyncService:
                 )
                 counts["supplier_costed" if changed else "unchanged"] += 1
                 continue
+            if (
+                order_status not in self._FULFILLED
+                and logistics_status not in self._FULFILLED
+            ):
+                counts["unchanged"] += 1
+                continue
             try:
                 changed = self.inventory.ship_order(
                     platform=row["platform"],
@@ -157,15 +163,13 @@ class OperationsSyncService:
         with self.database.connect() as connection:
             return connection.execute(
                 """
-                SELECT platform, store, order_id, seller_sku,
-                       SUM(quantity) AS quantity,
-                       MIN(substr(ordered_at, 1, 10)) AS ordered_on,
-                       MAX(substr(source_updated_at, 1, 10)) AS event_date,
-                       MAX(order_status) AS order_status,
-                       MAX(logistics_status) AS logistics_status,
-                       MAX(refund_status) AS refund_status
-                FROM platform_order_lines
-                GROUP BY platform, store, order_id, seller_sku
+                SELECT platform, canonical_store AS store, order_id, seller_sku,
+                       quantity,
+                       substr(ordered_at, 1, 10) AS ordered_on,
+                       substr(source_updated_at, 1, 10) AS event_date,
+                       order_status, logistics_status, refund_status,
+                       resolution_status
+                FROM effective_platform_order_lines
                 ORDER BY ordered_on, order_id, seller_sku
                 """
             ).fetchall()
@@ -178,13 +182,26 @@ class OperationsSyncService:
         ordered_on: str,
     ):
         with self.database.connect() as connection:
+            stores = equivalent_store_names(
+                connection, platform=platform, store=store
+            )
+            placeholders = ", ".join("?" for _ in stores)
             return connection.execute(
-                """
+                f"""
                 SELECT effective_date, unit_cost_cny
                 FROM sku_cost_history
-                WHERE platform=? AND store=? AND seller_sku=?
+                WHERE platform=? AND store IN ({placeholders})
+                  AND seller_sku=?
                   AND effective_date<=?
-                ORDER BY effective_date DESC LIMIT 1
+                ORDER BY CASE WHEN store=? THEN 0 ELSE 1 END,
+                         effective_date DESC, store
+                LIMIT 1
                 """,
-                (platform, store, seller_sku, ordered_on),
+                (
+                    platform.lower(),
+                    *stores,
+                    seller_sku,
+                    ordered_on,
+                    store,
+                ),
             ).fetchone()

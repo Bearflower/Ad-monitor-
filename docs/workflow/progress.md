@@ -1,0 +1,67 @@
+# 蓝图对标审计进度
+
+- 2026-07-27：开始逐项审计，创建计划文件。
+- 2026-07-27：完成第一轮蓝图、代码、数据库和 launchd 证据盘点；发现最新定时任务因紫鸟 Bridge 未启动而失败。
+- 2026-07-27：完成 34 项路线对标、跨路线缺口审计和经营 CSV 重构建议，生成 `docs/blueprint/blueprint-gap-audit-2026-07-27.md`。
+- 2026-07-27：用户批准先完成全部开发、后补真实数据；已写入 Shadow/Live 与紫鸟 CLI 页面执行边界设计。
+- 2026-07-27：完成八批次实施计划，覆盖经营输入、采集、异常、策略、运维、飞书回调、紫鸟执行和上线清单。
+- 2026-07-27：完成最小经营输入、真实历史异常联动、策略补齐、备份、
+  周月报、看板筛选、飞书回调、Shadow/Live 安全框架、外部适配器契约和
+  统一上线清单；Live 保持关闭。
+- 2026-07-27：补装 CRO、DOCX、备用浏览器和替代 TikTok Ads Skill。
+- 2026-07-28：用户确认连续执行上线第一至第五批；恢复上线计划。
+- 2026-07-28：确认 `com.adwatch.daily.plist` 配置有效，但服务当前未加载；开始第一批恢复与验证。
+- 2026-07-28：重新 bootstrap `com.adwatch.daily`，触发器恢复为每天 08:00。
+- 2026-07-28：通过 LaunchAgent 手动执行成功，退出码 0；采集 Shopee 1 条汇总指标并成功发送飞书日报。第一批完成。
+- 2026-07-28：用户选择半自动方案 2；完成订单事实自动同步、按 SKU 维护成本及双工作簿设计。
+- 2026-07-30：开始维护 LaunchAgent 重启后未自动恢复问题；已记录用户提供的时间线、根因和修复范围，进入现有实现与近期变更核查。
+- 2026-07-30：核查当前 plist 与代码：服务已在本次 `gui/501` 会话中重新注册，计划 09:00，但执行路径仍指向另一目录；确认缺少登录恢复监督、Bridge 前置门禁、独立故障日志与故障卡片发送实现。
+- 2026-07-30：对照 Apple LaunchAgent 登录加载机制和当前 `launchctl print-disabled` 状态，确认需修复安装/配置漂移并增加可验证的登录恢复探针，而不能依赖同目录的第二个 plist 作为唯一兜底。
+- 2026-07-30：发现生产目录与当前仓库不是可直接按提交追踪的同一工作树；生产侧已出现 2026-07-29 日报文件，下一步先确认是否已完成补跑，再由用户确定哪一目录作为后续唯一生产源。
+- 2026-07-30：用户确认 `/Users/yl/vscode/Cross_Border_Electronic_Commerce` 为唯一生产代码源；旧目录生成的定时任务全部取消，新任务固定北京时间每天 09:00。
+- 2026-07-30：确认唯一代码源的虚拟环境、环境配置和本地 `var/` 可用；旧目录已于 20:49 生成 2026-07-29 补跑日报，但该报告尚未进入唯一代码源的运行数据。
+- 2026-07-30：用户确认当前仓库 `var/` 为生产数据目录；重新补跑 2026-07-29，但本次禁用飞书发送。
+- 2026-07-30：用户批准单一受管 LaunchAgent 架构；进入运行数据流、故障闭环和验收设计。
+- 2026-07-30：用户批准故障闭环，并补充“09:00 先取当天汇率、没有则用昨天汇率、再采集和分析”；已核查现有实现，确认需修正执行日期与汇率来源日期语义。
+- 2026-07-30：确认利润查询只接受与广告数据日期同日的汇率，需先澄清“当天”是执行日还是日报数据日，避免汇率采集成功但分析仍缺失。
+- 2026-07-30：用户确认执行日汇率口径；进入汇率快照、测试矩阵与重启验收的最终设计确认。
+- 2026-07-30：用户确认完整设计并允许进入实施；已读取 `.trae/rules` 全部开发规则。
+- 2026-07-30：文档协作角色两次超时且未产出文件，终止重复尝试；当前会话已将批准设计固化到 `docs/design/2026-07-30-adwatch-launchagent-recovery-design.md`，待自审和用户书面复核。
+- 2026-07-30：完成设计文档自审；未发现占位符、范围矛盾或日期口径冲突，并补齐运行状态路径、汇率审计字段、时区失败规则和旧任务扫描边界。按 `.trae/rules/git-workflow.md` 暂不提交，等待用户书面复核。
+- 2026-07-30：用户批准进入开发；实施计划协作角色超时未产出，终止等待后由当前会话生成 `docs/plans/2026-07-30-adwatch-launchagent-recovery.md`，覆盖 10 个 TDD、审查、本机部署与持久化验收任务。
+- 2026-07-30：完成实施计划自审；需求均映射到具体任务，无空白错误，`tuple[str, ...]` 中的省略号仅为 Python 可变元组类型语法，不是实施占位符；补齐汇率源协议、测试辅助对象和稳定 CLI 输出。
+- 2026-07-30：开发前基线为 238 passed、2 failed；Ruff 25 项。Dashboard 失败回溯指向旧生产目录，开始核查测试路径漂移；所有结果均发生在本任务生产代码修改之前。
+- 2026-07-30：Task 1 实现协作角色未在时限内产出，已终止协作；当前会话开始按 TDD 补齐调度时区、Bridge 重试和汇率陈旧窗口中央配置，两条新增配置测试已得到预期 RED。
+- 2026-07-30：Task 1 GREEN 完成：新增配置用例 2 passed，`tests/test_config.py` 共 8 passed，目标 Ruff 全通过；`.env.example` 已补齐 09:00、Asia/Shanghai、Bridge 重试和汇率陈旧窗口配置。
+- 2026-07-30：Task 2 RED/GREEN 完成：新增迁移 19，为 `exchange_rates` 增加四个可空来源审计字段；迁移测试 2 passed、全部存储测试 10 passed、目标 Ruff 全通过。
+- 2026-07-30：Task 3 RED/GREEN 完成：ECB 新增真实公布日接口，调度汇率按执行日、昨日、7 天内最近交易日解析并写入报告日期；目标 11 passed、整合/迁移 17 passed、目标 Ruff 全通过。
+- 2026-07-30：Task 4 RED/GREEN 完成：新增非阻塞运行锁、原子状态文件、故障 JSONL、通知去重和写前脱敏；行为测试 4 passed、目标 Ruff 全通过。
+- 2026-07-30：Task 5 RED/GREEN 完成：新增飞书红色故障卡片，复用三次发送重试，故障通知不生成日报文件且消息二次脱敏；报告测试 4 passed、目标 Ruff 全通过。
+- 2026-07-30：Task 6 RED/GREEN 完成：新增受管 LaunchAgent 模块，支持当前仓库 09:00、RunAtLoad、健康检测、幂等安装、旧路径识别备份清理和精确卸载；调度/CLI 共 30 passed、目标 Ruff 全通过。
+- 2026-07-30：Task 7 RED/GREEN 完成：每日编排已提取为独立服务，顺序固定为执行日汇率、Bridge、采集、分析；汇率/单平台失败为 partial，Bridge 为硬门禁，`--no-notify` 保留本地工件和故障日志；相关 12 passed、目标 Ruff 全通过。
+- 2026-07-30：Task 8 RED/GREEN 完成：新增 09:00 登录补跑包装器、锁内幂等、成功状态和 scheduled-daily/schedule CLI 生命周期；partial 不记成功，系统时区不匹配时安装拒绝；组合回归 58 passed、目标 Ruff 全通过。
+- 2026-07-30：Task 9 第一轮全量验证完成：274 passed、2 个 Dashboard 失败与开发前基线一致；本任务新增回归为 0。全量 Ruff 23 项，较开发前 25 项减少 2 项，新增/修改目标模块均通过；`git diff --check` 通过。
+- 2026-07-30：部署前探测发现 `.venv/bin/adwatch` shebang 和 editable 元数据仍引用旧生产目录，导致直接 CLI 运行旧实现；已从唯一代码源重新执行 editable 安装。复验 shebang、pip metadata、plist 渲染和 CLI 帮助均只指向当前仓库，输出为 09:00、`scheduled-daily`、`RunAtLoad=true`。
+- 2026-07-30：完成本机受管安装：旧 plist 已备份并注销，当前 LaunchAgent 健康、loaded/enabled、09:00、RunAtLoad、工作目录和运行入口均只指向唯一代码源；用户 LaunchAgents 中旧目录引用为 0。
+- 2026-07-30：完成 2026-07-29 `--no-notify` 补跑：执行日汇率 2026-07-30 已应用并保留来源审计，Shopee 成功 1 条，TikTok 页面超时导致 partial；本地质量报告和日报已生成，故障通知状态均为 suppressed。安装时 RunAtLoad 自动实例已及时终止，其单条 running 残留已精确标记 interrupted，当前 running 计数为 0。
+- 2026-07-30：最终本地验证为 275 passed、2 个开发前既有 Dashboard 失败；本任务目标 Ruff、compileall、`git diff --check`、plist lint 全通过。LaunchAgent healthy/loaded/enabled，旧路径引用 0，0729 日报与质量报告存在，运行中采集记录 0。待用户明确授权重启/重新登录和下一次真实 09:00 验收。
+- 2026-07-30：验证用户提供的最终 SKU 成本工作簿：模板和前 6 条成本有效，数据库副本正式导入 6 条后只剩 `ST-OC1232-08A`；原始 XLSX 的 `待补成本!O8` 和 `Q8` 实际为空，生产库未被本次验证改写，暂缓重启。
+- 2026-07-30：用户确认 `ST-OC1232-08A` 对应取消订单；新增回归并修正待补成本查询，仅排除“已有订单且全部取消”的 SKU，同时保留无订单新品。相关订单测试 9 passed。
+- 2026-07-30：备份生产库后正式导入最终工作簿的 6 条有效 SKU 成本；订单同步结果为 `cancelled=24`、`pending_cost=0`、`pending_fulfillment=0`、`pending_inventory=0`，未给取消订单 SKU 写入虚假成本。
+- 2026-07-30：再次以 `--no-notify` 成功重跑 2026-07-29；执行日汇率来自 2026-07-30，Shopee 日报已刷新，销售额 ¥250.31、SKU 成本及其他费用 ¥151.40、净利润 -¥26.31，飞书发送状态为 suppressed。
+- 2026-07-30：修复知识页内容 A→B→A 时历史哈希唯一键冲突，并覆盖后续新版本编号；新增回归通过。实时知识更新复验因当前紫鸟 Bridge/Keychain 已不可达而未完成，但该附加项不影响已成功生成的日报。
+- 2026-07-30：最终全量验证 277 passed、2 个开发前既有 Dashboard 失败；目标 Ruff 与 compileall 通过。已把本次成功补跑写入调度状态，`scheduled-daily` 复验为 `already_successful`，确保今天重启登录不会重复发送 7 月 29 日日报。LaunchAgent 仍为 healthy/loaded/enabled、09:00、RunAtLoad、唯一代码源。
+- 2026-07-30：23:40 完成真实 Mac 重启/重新登录验收；LaunchAgent 在新 `gui/501` 会话中自动恢复，23:41 RunAtLoad 执行 1 次并以 `already_successful` 正常退出 0，未重复发送 7 月 29 日日报。09:00 触发器、RunAtLoad、唯一代码源、loaded/enabled/healthy 与 plist lint 均通过，用户 LaunchAgents 中旧目录引用为 0。紫鸟客户端重启后尚未启动，Bridge/Keychain 当前不可用，需启动紫鸟后完成外部依赖复验。
+- 2026-07-30：用户启动紫鸟后完成真实登录会话复验；受限诊断环境最初无法访问 Keychain/localhost，但沙箱外 `ziniao-cli doctor` 的配置、API Key、API、ZClaw Bridge 和客户端登录全部通过，Adwatch Python 调用成功读取 TikTok/Shopee 两个店铺。上线清单已移除 `ziniao_bridge` 阻塞项，LaunchAgent 继续保持 healthy/loaded/enabled、最近退出码 0。
+- 2026-07-30：用户反馈重启后前端未显示 0729；分层排查确认生产库和 `ReportReadModel` 最新日期均为 2026-07-29，根因是 Dashboard 服务未配置随重启启动，8765 端口无进程。已从唯一代码源恢复本地 Dashboard，并通过浏览器及 `/api/snapshot?date=2026-07-29` 验证 HTTP 200、默认日期 0729、Shopee 消耗 327、GMV 1243、订单 6、净利润 -¥26.31。
+- 2026-08-03：按用户批准的方案 1/方案 2，在唯一代码源内增加可逆的 `ADWATCH_TIKTOK_COLLECTION_ENABLED` 配置；生产值设为 `false`，每日任务、手工真实采集、紫鸟店铺门禁和上线清单统一只启用 Shopee，TikTok 历史数据与店铺配置不删除。
+- 2026-08-03：TikTok 开关目标回归 56 passed；全量回归 283 passed、2 个既有 Dashboard 文案断言失败；目标 Ruff 与 compileall 通过。LaunchAgent 仍为 healthy/loaded/enabled、北京时间 09:00，执行程序和工作目录均指向唯一代码源。
+- 2026-08-03：0801 `--no-notify` 补采已验证仅创建 Shopee 采集运行、汇率回退到 2026-07-31、飞书 suppressed；Shopee 会话被重定向至登录页，故真实结果为 partial、0801 指标仍为 0。已重新打开紫鸟 Shopee 窗口，等待人工完成一次登录后重跑。
+- 2026-08-03：用户完成 Shopee 登录后，现场数据暴露出展示值 ROAS 舍入边界（1782/382 显示为 4.67）；按既有 `0.01` 数值对账容差补充 RED/GREEN 回归，采集器 14 passed、目标 Ruff 通过。
+- 2026-08-03：0801 最终无通知补采成功：Shopee 消耗 381.96 THB、GMV 1782.00 THB、8 单、ROAS 4.67，质量报告 received/accepted=1/1、quarantined=0，飞书 suppressed。Dashboard 已打开并保留在 2026-08-01，SKU 与库存页待补成本仍为 0，数据库两个待补成本口径均为 0。
+- 2026-08-03：同日 09:00 LaunchAgent 独立完成 0802 自动日报，状态 `ok`、仅 Shopee received/accepted=1/1、退出码 0，并按正常定时策略发送飞书；调度状态更新至 `last_successful_report_date=2026-08-02`，服务继续 healthy/loaded/enabled。
+- 2026-08-10：完成 P2-D（9.1-9.3）实验体系与备用采集实施：
+  - 实验体系：models（状态机、分桶、护栏配置）、guardrails（护栏评估逻辑）、registry（实验仓储）、service（实验管理服务）
+  - 备用采集切换：CollectorRegistry（健康状态管理、故障切换）、FallbackCollector（备用采集器）
+  - 数据库迁移 27（experiments 相关表）、28（collector_health 表）
+  - 新增 100 个测试（541 passed），Ruff 0，compileall 通过

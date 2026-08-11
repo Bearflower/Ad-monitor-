@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from datetime import UTC, date, datetime
 
 from adwatch.storage.db import Database
+from adwatch.storage.store_aliases import equivalent_store_names
 
 MODES = frozenset({"supplier_fulfilled", "stocked"})
 SUPPLY_STATUSES = frozenset({"available", "paused"})
@@ -18,6 +19,7 @@ class FulfillmentSnapshot:
     mode: str
     policy_effective_date: date
     supply_status: str
+    resolution_source: str
 
 
 class FulfillmentService:
@@ -65,6 +67,45 @@ class FulfillmentService:
                 ),
             )
 
+    def set_store_default(
+        self,
+        *,
+        platform: str,
+        store: str,
+        effective_date: date,
+        mode: str,
+        supply_status: str,
+        note: str = "",
+    ) -> None:
+        if mode not in MODES:
+            raise ValueError("invalid fulfillment mode")
+        if supply_status not in SUPPLY_STATUSES:
+            raise ValueError("invalid supply status")
+        if not all((platform.strip(), store.strip())):
+            raise ValueError("platform and store are required")
+        with self.database.transaction() as connection:
+            connection.execute(
+                """
+                INSERT INTO store_fulfillment_history(
+                    platform, store, effective_date, mode,
+                    supply_status, note, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(platform, store, effective_date)
+                DO UPDATE SET mode=excluded.mode,
+                              supply_status=excluded.supply_status,
+                              note=excluded.note
+                """,
+                (
+                    platform.lower(),
+                    store,
+                    effective_date.isoformat(),
+                    mode,
+                    supply_status,
+                    note,
+                    datetime.now(UTC).isoformat(),
+                ),
+            )
+
     def resolve_for_order(
         self,
         *,
@@ -74,19 +115,46 @@ class FulfillmentService:
         ordered_on: date,
     ):
         with self.database.connect() as connection:
-            return connection.execute(
-                """
+            stores = equivalent_store_names(
+                connection, platform=platform, store=store
+            )
+            placeholders = ", ".join("?" for _ in stores)
+            policy = connection.execute(
+                f"""
                 SELECT mode, supply_status, effective_date
                 FROM sku_fulfillment_history
-                WHERE platform=? AND store=? AND seller_sku=?
+                WHERE platform=? AND store IN ({placeholders})
+                  AND seller_sku=?
                   AND effective_date<=?
-                ORDER BY effective_date DESC LIMIT 1
+                ORDER BY CASE WHEN store=? THEN 0 ELSE 1 END,
+                         effective_date DESC, store
+                LIMIT 1
                 """,
                 (
                     platform.lower(),
-                    store,
+                    *stores,
                     seller_sku,
                     ordered_on.isoformat(),
+                    store,
+                ),
+            ).fetchone()
+            if policy is not None:
+                return policy
+            return connection.execute(
+                f"""
+                SELECT mode, supply_status, effective_date
+                FROM store_fulfillment_history
+                WHERE platform=? AND store IN ({placeholders})
+                  AND effective_date<=?
+                ORDER BY CASE WHEN store=? THEN 0 ELSE 1 END,
+                         effective_date DESC, store
+                LIMIT 1
+                """,
+                (
+                    platform.lower(),
+                    *stores,
+                    ordered_on.isoformat(),
+                    store,
                 ),
             ).fetchone()
 
@@ -100,30 +168,62 @@ class FulfillmentService:
         ordered_on: date,
     ) -> FulfillmentSnapshot | None:
         with self.database.transaction() as connection:
+            stores = equivalent_store_names(
+                connection, platform=platform, store=store
+            )
+            placeholders = ", ".join("?" for _ in stores)
             existing = connection.execute(
-                """
+                f"""
                 SELECT * FROM order_fulfillment_snapshots
-                WHERE platform=? AND store=? AND order_id=? AND seller_sku=?
+                WHERE platform=? AND store IN ({placeholders})
+                  AND order_id=? AND seller_sku=?
+                ORDER BY CASE WHEN store=? THEN 0 ELSE 1 END, store
+                LIMIT 1
                 """,
-                (platform.lower(), store, order_id, seller_sku),
+                (platform.lower(), *stores, order_id, seller_sku, store),
             ).fetchone()
             if existing is not None:
                 return self._snapshot(existing)
             policy = connection.execute(
-                """
+                f"""
                 SELECT mode, supply_status, effective_date
                 FROM sku_fulfillment_history
-                WHERE platform=? AND store=? AND seller_sku=?
+                WHERE platform=? AND store IN ({placeholders})
+                  AND seller_sku=?
                   AND effective_date<=?
-                ORDER BY effective_date DESC LIMIT 1
+                ORDER BY CASE WHEN store=? THEN 0 ELSE 1 END,
+                         effective_date DESC, store
+                LIMIT 1
                 """,
                 (
                     platform.lower(),
-                    store,
+                    *stores,
                     seller_sku,
                     ordered_on.isoformat(),
+                    store,
                 ),
             ).fetchone()
+            resolution_source = "sku_policy"
+            if policy is None:
+                default_placeholders = ", ".join("?" for _ in stores)
+                policy = connection.execute(
+                    f"""
+                    SELECT mode, supply_status, effective_date
+                    FROM store_fulfillment_history
+                    WHERE platform=? AND store IN ({default_placeholders})
+                      AND effective_date<=?
+                    ORDER BY CASE WHEN store=? THEN 0 ELSE 1 END,
+                             effective_date DESC, store
+                    LIMIT 1
+                    """,
+                    (
+                        platform.lower(),
+                        *stores,
+                        ordered_on.isoformat(),
+                        store,
+                    ),
+                ).fetchone()
+                resolution_source = "store_default"
             if policy is None:
                 return None
             connection.execute(
@@ -132,7 +232,7 @@ class FulfillmentService:
                     platform, store, order_id, seller_sku, mode,
                     policy_effective_date, supply_status,
                     resolution_source, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, 'sku_policy', ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     platform.lower(),
@@ -142,6 +242,7 @@ class FulfillmentService:
                     policy["mode"],
                     policy["effective_date"],
                     policy["supply_status"],
+                    resolution_source,
                     datetime.now(UTC).isoformat(),
                 ),
             )
@@ -204,4 +305,5 @@ class FulfillmentService:
                 row["policy_effective_date"]
             ),
             supply_status=row["supply_status"],
+            resolution_source=row["resolution_source"],
         )

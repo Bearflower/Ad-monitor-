@@ -406,7 +406,7 @@ git commit -m "feat: require field activation for Ziniao live actions"
 - Modify: `tests/pipeline/test_validation.py`
 - Modify: `tests/operations/test_launch_checklist.py`
 - Modify: `tests/operations/test_readiness.py`
-- Modify: `docs/blueprint-gap-audit-2026-07-27.md`
+- Modify: `docs/blueprint/blueprint-gap-audit-2026-07-27.md`
 - Modify: `README.md`
 
 - [x] **Step 1: 写完整清单失败测试**
@@ -485,6 +485,6 @@ Expected: pytest、Ruff、compileall 全部退出 0；命令齐全；清单只�
 - [x] **Step 6: 提交**
 
 ```bash
-git add src tests README.md docs/blueprint-gap-audit-2026-07-27.md
+git add src tests README.md docs/blueprint/blueprint-gap-audit-2026-07-27.md
 git commit -m "feat: close adwatch implementation gaps"
 ```

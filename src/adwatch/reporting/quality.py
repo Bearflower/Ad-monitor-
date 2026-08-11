@@ -1,9 +1,17 @@
 import json
 from dataclasses import asdict
 from datetime import date
+from decimal import Decimal
 from pathlib import Path
 
 from adwatch.pipeline.runner import PipelineSummary
+
+
+def _json_default(value: object) -> str:
+    """JSON 序列化兜底：将 Decimal 转为字符串，其余类型抛出异常。"""
+    if isinstance(value, Decimal):
+        return str(value)
+    raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")
 
 
 def write_quality_report(
@@ -27,7 +35,7 @@ def write_quality_report(
         },
     }
     temporary.write_text(
-        json.dumps(payload, indent=2, sort_keys=True),
+        json.dumps(payload, indent=2, sort_keys=True, default=_json_default),
         encoding="utf-8",
     )
     temporary.replace(destination)

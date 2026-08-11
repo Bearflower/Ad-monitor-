@@ -69,6 +69,7 @@ def export_business_template(
 
 
 def import_business_inputs(database: Database, source: Path) -> int:
+    source_name = _safe_source_name(source)
     with source.open(encoding="utf-8-sig", newline="") as handle:
         reader = csv.DictReader(handle)
         missing_columns = [key for key in COLUMNS if key not in reader.fieldnames]
@@ -124,15 +125,17 @@ def import_business_inputs(database: Database, source: Path) -> int:
                 INSERT INTO product_costs(
                     sku_id, effective_date, product_cost, commission_rate,
                     seller_shipping, coupons, allocated_fixed_cost,
-                    refund_amount
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    refund_amount, refund_data_status, input_source_name
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'observed', ?)
                 ON CONFLICT(sku_id, effective_date) DO UPDATE SET
                     product_cost=excluded.product_cost,
                     commission_rate=excluded.commission_rate,
                     seller_shipping=excluded.seller_shipping,
                     coupons=excluded.coupons,
                     allocated_fixed_cost=excluded.allocated_fixed_cost,
-                    refund_amount=excluded.refund_amount
+                    refund_amount=excluded.refund_amount,
+                    refund_data_status=excluded.refund_data_status,
+                    input_source_name=excluded.input_source_name
                 """,
                 (
                     row["sku_id"],
@@ -143,6 +146,7 @@ def import_business_inputs(database: Database, source: Path) -> int:
                     row["coupons"],
                     row["allocated_fixed_cost"],
                     row["refund_amount"],
+                    source_name,
                 ),
             )
             connection.execute(
@@ -174,6 +178,7 @@ def import_business_inputs(database: Database, source: Path) -> int:
 
 
 def import_minimal_business_inputs(database: Database, source: Path) -> int:
+    source_name = _safe_source_name(source)
     with source.open(encoding="utf-8-sig", newline="") as handle:
         reader = csv.DictReader(handle)
         missing_columns = [
@@ -190,18 +195,22 @@ def import_minimal_business_inputs(database: Database, source: Path) -> int:
         try:
             data_date = date.fromisoformat((row["data_date"] or "").strip())
             product_cost = Decimal((row["total_product_cost"] or "").strip())
-            refund_amount = Decimal((row["refund_amount"] or "0").strip())
+            refund_text = (row["refund_amount"] or "").strip()
+            refund_observed = bool(refund_text)
+            refund_amount = Decimal(refund_text) if refund_observed else Decimal(0)
         except (ValueError, InvalidOperation) as error:
             raise BusinessInputError(
                 f"line {index} has invalid values"
             ) from error
         if product_cost < 0 or refund_amount < 0:
             raise BusinessInputError(f"line {index} contains negative values")
-        validated.append((index, data_date, product_cost, refund_amount))
+        validated.append(
+            (index, data_date, product_cost, refund_amount, refund_observed)
+        )
 
     resolved = []
     with database.connect() as connection:
-        for line, data_date, product_cost, refund_amount in validated:
+        for line, data_date, product_cost, refund_amount, refund_observed in validated:
             metrics = connection.execute(
                 """
                 SELECT platform, store, campaign_id, sku_id, currency
@@ -215,10 +224,24 @@ def import_minimal_business_inputs(database: Database, source: Path) -> int:
                     f"line {line} date {data_date.isoformat()} "
                     f"matches {len(metrics)} metric rows"
                 )
-            resolved.append((data_date, product_cost, refund_amount, metrics[0]))
+            resolved.append(
+                (
+                    data_date,
+                    product_cost,
+                    refund_amount,
+                    refund_observed,
+                    metrics[0],
+                )
+            )
 
     with database.transaction() as connection:
-        for data_date, product_cost, refund_amount, metric in resolved:
+        for (
+            data_date,
+            product_cost,
+            refund_amount,
+            refund_observed,
+            metric,
+        ) in resolved:
             connection.execute(
                 "INSERT OR IGNORE INTO sku_mappings(sku_id) VALUES (?)",
                 (metric["sku_id"],),
@@ -228,20 +251,33 @@ def import_minimal_business_inputs(database: Database, source: Path) -> int:
                 INSERT INTO product_costs(
                     sku_id, effective_date, product_cost, commission_rate,
                     seller_shipping, coupons, allocated_fixed_cost,
-                    refund_amount
-                ) VALUES (?, ?, ?, '0', '0', '0', '0', ?)
+                    refund_amount, refund_data_status, input_source_name
+                ) VALUES (
+                    ?, ?, ?, '0', '0', '0', '0', ?, ?, ?
+                )
                 ON CONFLICT(sku_id, effective_date) DO UPDATE SET
                     product_cost=excluded.product_cost,
-                    refund_amount=excluded.refund_amount
+                    refund_amount=excluded.refund_amount,
+                    refund_data_status=excluded.refund_data_status,
+                    input_source_name=excluded.input_source_name
                 """,
                 (
                     metric["sku_id"],
                     data_date.isoformat(),
                     str(product_cost),
                     str(refund_amount),
+                    "observed" if refund_observed else "pending_data",
+                    source_name,
                 ),
             )
     return len(resolved)
+
+
+def _safe_source_name(source: Path) -> str:
+    name = source.name
+    if not name or any(ord(char) < 32 or ord(char) == 127 for char in name):
+        raise BusinessInputError("business input filename is invalid")
+    return name
 
 
 def _validate_row(row: dict[str, str], line: int) -> dict[str, str]:

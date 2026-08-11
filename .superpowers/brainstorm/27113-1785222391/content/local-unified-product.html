@@ -1,0 +1,58 @@
+<h2>不部署服务器：Mac 本地一体化 Web 系统</h2>
+<p class="subtitle">你只打开一个网页；其他组件都在后台自动协作。</p>
+
+<div class="mockup">
+  <div class="mockup-header">你看到的唯一入口：AdWatch 本地网页</div>
+  <div class="mockup-body">
+    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px">
+      <div style="padding:15px;background:#dbeafe;border-radius:10px">
+        <div class="label">今日经营</div>
+        <strong>收入 / 利润 / ROAS</strong>
+        <p>广告异常、退款和待处理事项</p>
+      </div>
+      <div style="padding:15px;background:#dcfce7;border-radius:10px">
+        <div class="label">SKU 与库存</div>
+        <strong>维护成本 / 查看库存</strong>
+        <p>缺成本的 SKU 直接在线填写</p>
+      </div>
+      <div style="padding:15px;background:#fef3c7;border-radius:10px">
+        <div class="label">记账对账</div>
+        <strong>费用 / 出资 / 提款</strong>
+        <p>50/50 出资与现金余额核对</p>
+      </div>
+      <div style="padding:15px;background:#ede9fe;border-radius:10px">
+        <div class="label">分润审批</div>
+        <strong>60/40 利润分配</strong>
+        <p>查看依据、确认后生成记录</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div style="text-align:center;font-size:28px;margin:18px">↕</div>
+
+<div class="split">
+  <div class="mockup">
+    <div class="mockup-header">Mac 后台自动运行</div>
+    <div class="mockup-body">
+      <p>① 紫鸟 CLI 每天采集 Shopee / TikTok</p>
+      <p>② AdWatch 自动清洗、去重、匹配 SKU 成本</p>
+      <p>③ 分析模块计算利润、ROAS、库存和异常</p>
+      <p>④ launchd 定时调度，不需要手工运行命令</p>
+    </div>
+  </div>
+  <div class="mockup">
+    <div class="mockup-header">飞书只负责提醒与审批</div>
+    <div class="mockup-body">
+      <p>异常广告、缺成本、库存不足、对账差异</p>
+      <p>卡片链接一键回到本地 Web 页面处理</p>
+      <p>广告写操作仍需人工批准后才执行</p>
+      <p>飞书不是数据库，不承担数据维护</p>
+    </div>
+  </div>
+</div>
+
+<div style="margin-top:20px;padding:15px;background:#f3f4f6;border-radius:10px">
+  <strong>Excel 的新定位：</strong>
+  初次批量补成本、备份和导出对账报告。平时新增 SKU 会自动出现在网页的“待补成本”列表。
+</div>
