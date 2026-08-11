@@ -29,7 +29,10 @@ class OrderRepository:
                         variation_name=excluded.variation_name,
                         product_name=excluded.product_name,
                         inventory_units=excluded.inventory_units,
-                        observed_at=excluded.observed_at
+                        observed_at=MIN(
+                            platform_sku_mappings.observed_at,
+                            excluded.observed_at
+                        )
                     """,
                     (
                         item.platform,
