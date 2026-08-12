@@ -806,11 +806,7 @@ def render_operations_forms(csrf_token: str) -> str:
           </div>
           <div class="form-field">
             <label>币种</label>
-            <input name="currency" value="CNY" required>
-          </div>
-          <div class="form-field">
-            <label>汇率</label>
-            <input name="rate_to_cny" value="1" required>
+            <select name="currency"><option>CNY</option><option>THB</option><option>SGD</option></select>
           </div>
           <div class="form-field">
             <label>付款人</label>

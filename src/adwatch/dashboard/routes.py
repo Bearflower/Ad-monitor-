@@ -562,12 +562,23 @@ class DashboardRouter:
                 return RouteResponse(303, location="/ad-funds")
             if path != "/expenses":
                 return RouteResponse(404, message="unknown route")
+            if form.get("rate_to_cny", "").strip():
+                if form.get("currency", "CNY").upper() == "CNY":
+                    expense_rate = Decimal(form["rate_to_cny"])
+                else:
+                    expense_rate, _, _ = self._accounting_rate(
+                        form, occurred_on
+                    )
+            else:
+                expense_rate, _, _ = self._accounting_rate(
+                    form, occurred_on
+                )
             draft = ExpenseDraft(
                 occurred_on=occurred_on,
                 category=form["category"],
                 amount_original=Decimal(form["amount"]),
                 currency=form["currency"],
-                rate_to_cny=Decimal(form["rate_to_cny"]),
+                rate_to_cny=expense_rate,
                 payer=form["payer"],
                 fund_nature=form["fund_nature"],
                 affects_profit=form.get("affects_profit") == "1",

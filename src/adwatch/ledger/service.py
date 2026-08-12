@@ -1051,8 +1051,10 @@ class LedgerService:
             params.append(end_date.isoformat())
 
         sql = (
-            "SELECT id, platform, store, entry_type, amount_cny, "
-            "occurred_on, source, status, created_by, reversal_reason "
+            "SELECT id, platform, store, entry_type, amount_original, "
+            "currency, rate_to_cny, amount_cny, credited_amount_original, "
+            "credited_amount_cny, rate_date, rate_source, occurred_on, "
+            "source, status, created_by, reversal_reason "
             "FROM ad_funding_entries"
         )
         if clauses:
@@ -1069,7 +1071,18 @@ class LedgerService:
                 "platform": row["platform"],
                 "store": row["store"],
                 "entry_type": row["entry_type"],
+                "amount_original": Decimal(row["amount_original"]),
+                "currency": row["currency"],
+                "rate_to_cny": Decimal(row["rate_to_cny"]),
                 "amount_cny": Decimal(row["amount_cny"]),
+                "credited_amount_original": Decimal(
+                    row["credited_amount_original"] or 0
+                ),
+                "credited_amount_cny": Decimal(
+                    row["credited_amount_cny"] or 0
+                ),
+                "rate_date": row["rate_date"],
+                "rate_source": row["rate_source"],
                 "occurred_on": date.fromisoformat(row["occurred_on"]),
                 "source": row["source"],
                 "status": row["status"],
@@ -1169,8 +1182,9 @@ class LedgerService:
             params.append(end_date.isoformat())
 
         sql = (
-            "SELECT id, partner, entry_type, amount_cny, occurred_on, "
-            "status, created_by, reversal_reason "
+            "SELECT id, partner, entry_type, entry_name, amount_original, "
+            "currency, rate_to_cny, amount_cny, rate_date, rate_source, "
+            "note, occurred_on, status, created_by, reversal_reason "
             "FROM capital_entries"
         )
         if clauses:
@@ -1186,7 +1200,14 @@ class LedgerService:
                 "id": row["id"],
                 "partner": row["partner"],
                 "entry_type": row["entry_type"],
+                "entry_name": row["entry_name"],
+                "amount_original": Decimal(row["amount_original"]),
+                "currency": row["currency"],
+                "rate_to_cny": Decimal(row["rate_to_cny"]),
                 "amount_cny": Decimal(row["amount_cny"]),
+                "rate_date": row["rate_date"],
+                "rate_source": row["rate_source"],
+                "note": row["note"],
                 "occurred_on": date.fromisoformat(row["occurred_on"]),
                 "status": row["status"],
                 "created_by": row["created_by"],
@@ -1227,8 +1248,10 @@ class LedgerService:
             rows = connection.execute(
                 """
                 SELECT id, platform, store, order_id, seller_sku,
-                       goods_cost_cny, service_fee_cny, occurred_on,
-                       status, created_by, reversal_reason
+                       goods_cost_original, service_fee_original, currency,
+                       rate_to_cny, goods_cost_cny, service_fee_cny,
+                       rate_date, rate_source, occurred_on, status,
+                       created_by, reversal_reason
                 FROM review_order_costs
                 ORDER BY occurred_on DESC, created_at DESC
                 """
@@ -1243,8 +1266,18 @@ class LedgerService:
                 "store": row["store"],
                 "order_id": row["order_id"],
                 "seller_sku": row["seller_sku"],
+                "goods_cost_original": Decimal(
+                    row["goods_cost_original"] or 0
+                ),
+                "service_fee_original": Decimal(
+                    row["service_fee_original"] or 0
+                ),
+                "currency": row["currency"],
+                "rate_to_cny": Decimal(row["rate_to_cny"]),
                 "goods_cost_cny": Decimal(row["goods_cost_cny"]),
                 "service_fee_cny": Decimal(row["service_fee_cny"]),
+                "rate_date": row["rate_date"],
+                "rate_source": row["rate_source"],
                 "occurred_on": date.fromisoformat(row["occurred_on"]),
                 "status": row["status"],
                 "created_by": row["created_by"],

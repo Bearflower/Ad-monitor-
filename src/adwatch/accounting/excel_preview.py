@@ -96,6 +96,9 @@ class ExcelPrototypePreview:
                 if seen[key] == row
                 else ("conflict", "same natural key with different values")
             )
+        database_status = self._database_status(sheet, row)
+        if database_status is not None:
+            return database_status
         currency = row.get("币种", "")
         currency_code = {"฿": "THB", "THB": "THB", "S$": "SGD", "SGD": "SGD"}.get(currency)
         if currency_code and sheet != "汇率换算":
@@ -103,6 +106,32 @@ class ExcelPrototypePreview:
             if month and not self._has_monthly_rate(currency_code, month):
                 return "missing_rate", "monthly conversion rate not stored"
         return "valid", "ready for reviewed import"
+
+    def _database_status(self, sheet: str, row: dict[str, str]):
+        if sheet != "收入明细":
+            return None
+        order_id = row.get("订单编号", "")
+        occurred_on = row.get("日期", "")
+        amount = row.get("结算金额(SGD)", "")
+        if not order_id or not occurred_on or not amount:
+            return None
+        with self.database.connect() as connection:
+            matches = connection.execute(
+                """
+                SELECT amount_original, currency FROM manual_income_entries
+                WHERE order_id=? AND occurred_on=?
+                """,
+                (order_id, occurred_on),
+            ).fetchall()
+        if not matches:
+            return None
+        if any(
+            item["currency"] == "SGD"
+            and Decimal(item["amount_original"]) == Decimal(amount)
+            for item in matches
+        ):
+            return "duplicate", "same record already exists in database"
+        return "conflict", "natural key exists with different values"
 
     def _has_monthly_rate(self, currency: str, year_month: str) -> bool:
         with self.database.connect() as connection:

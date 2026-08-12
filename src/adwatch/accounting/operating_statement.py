@@ -141,6 +141,10 @@ class OperatingStatementService:
                 connection, "withdrawal_entries", "amount_cny", "occurred_on",
                 start, end, "status='confirmed'"
             )
+            profit_payments, payment_count = self._sum_count(
+                connection, "profit_payments", "amount_cny", "paid_on",
+                start, end, "status IN ('paid', 'reversed')"
+            )
             missing = tuple(
                 row[0]
                 for row in connection.execute(
@@ -166,7 +170,7 @@ class OperatingStatementService:
         cash_change = _money(
             revenue - _money(purchase) - _money(funding[0])
             - _money(expense) - _money(review) + _money(capital)
-            - _money(withdrawal)
+            - _money(withdrawal) - _money(profit_payments)
         )
         counts = {
             "settlement_records": int(settlement_count),
@@ -181,6 +185,7 @@ class OperatingStatementService:
             "ad_funding_entries": int(funding[2]),
             "capital_entries": int(capital_count),
             "withdrawal_entries": int(withdrawal_count),
+            "profit_payments": int(payment_count),
         }
         return OperatingStatement(
             starts_on, ends_on, _money(revenue), _money(purchase),

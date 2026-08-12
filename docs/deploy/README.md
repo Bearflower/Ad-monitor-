@@ -183,6 +183,11 @@ docker-compose restart
 | 广告调优 | `/adwatch/optimization` | ROAS、异常、建议 |
 | 收入与广告资金 | `/adwatch/ad-funds` | 收入、充值、分账 |
 | SKU 与库存 | `/adwatch/inventory` | SKU 成本、采购入库 |
+| 月度经营账 | `/adwatch/operating-statement?year=YYYY` | 12 个月利润/现金分离汇总 |
+
+部署验收必须确认月度经营账可访问，并核对经营净利润不扣采购付款和广告充值。
+发布包必须由 `git archive` 生成，不得包含 `.env`、SQLite、日志、凭证、临时目录
+或原型 Excel；生产环境继续保留既有 `.env` 与 `var/`。TikTok 自动采集仍关闭。
 | 策略规则 | `/adwatch/strategy-rules` | 版本管理、Shadow 模拟 |
 | 审批审计 | `/adwatch/approvals` | 审批列表、执行审计、熔断 |
 | 合伙人分润 | `/adwatch/profit-sharing` | 利润期间、协议、支付 |
