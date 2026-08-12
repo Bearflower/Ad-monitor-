@@ -146,6 +146,7 @@ class ProfitSharingService:
                 ),
             )
             shares = json.loads(agreement["shares_json"])
+            distributable = max(_money(net_profit_cny), Decimal("0.00"))
             for partner, ratio_text in shares.items():
                 ratio = Decimal(ratio_text)
                 connection.execute(
@@ -158,7 +159,7 @@ class ProfitSharingService:
                         period_id,
                         partner,
                         str(ratio),
-                        str(_money(net_profit_cny * ratio)),
+                        str(_money(distributable * ratio)),
                     ),
                 )
             self._audit(
@@ -178,6 +179,73 @@ class ProfitSharingService:
                 now,
             )
         return period_id
+
+    def get_period_detail(self, period_id: str) -> dict:
+        with self.database.connect() as connection:
+            period = connection.execute(
+                "SELECT * FROM profit_periods WHERE id=?", (period_id,)
+            ).fetchone()
+            if period is None:
+                raise ProfitSharingError("profit period not found")
+            rows = connection.execute(
+                """
+                SELECT allocation.partner, allocation.share_ratio,
+                       allocation.amount_cny AS due_cny,
+                       COALESCE(SUM(CASE
+                         WHEN payment.status IN ('paid','reversed')
+                         THEN CAST(payment.amount_cny AS REAL) ELSE 0 END), 0)
+                         AS paid_cny
+                FROM profit_allocations AS allocation
+                LEFT JOIN profit_payments AS payment
+                  ON payment.period_id=allocation.period_id
+                 AND payment.partner=allocation.partner
+                WHERE allocation.period_id=?
+                GROUP BY allocation.partner, allocation.share_ratio,
+                         allocation.amount_cny
+                ORDER BY allocation.partner
+                """,
+                (period_id,),
+            ).fetchall()
+        allocations = tuple(
+            {
+                "partner": row["partner"],
+                "share_ratio": Decimal(row["share_ratio"]),
+                "due_cny": _money(Decimal(row["due_cny"])),
+                "paid_cny": _money(Decimal(str(row["paid_cny"]))),
+                "outstanding_cny": max(
+                    _money(
+                        Decimal(row["due_cny"])
+                        - Decimal(str(row["paid_cny"]))
+                    ),
+                    Decimal("0.00"),
+                ),
+            }
+            for row in rows
+        )
+        net_profit = Decimal(period["net_profit_cny"])
+        if period["status"] == "reversed":
+            display_status = "reversed"
+        elif net_profit <= 0:
+            display_status = "loss"
+        elif period["status"] == "draft":
+            display_status = "draft"
+        elif allocations and all(
+            item["outstanding_cny"] == 0 for item in allocations
+        ):
+            display_status = "settled"
+        elif any(item["paid_cny"] > 0 for item in allocations):
+            display_status = "paying"
+        else:
+            display_status = "ready"
+        return {
+            **dict(period),
+            "net_profit_cny": _money(net_profit),
+            "distributable_profit_cny": max(
+                _money(net_profit), Decimal("0.00")
+            ),
+            "allocations": allocations,
+            "display_status": display_status,
+        }
 
     def create_period_from_ledger(
         self, *, starts_on: date, ends_on: date, actor: str

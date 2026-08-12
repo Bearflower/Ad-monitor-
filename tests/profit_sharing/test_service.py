@@ -63,6 +63,60 @@ def test_agreement_shares_must_total_one(sharing):
         )
 
 
+def test_loss_period_allocates_zero_and_reports_loss(sharing):
+    service, _ = sharing
+    service.create_agreement(
+        effective_from=date(2026, 1, 1),
+        shares={"洁云": Decimal("0.60"), "苏姐": Decimal("0.40")},
+        actor="yl",
+    )
+    period = service.create_period(
+        starts_on=date(2026, 8, 1),
+        ends_on=date(2026, 8, 31),
+        net_profit_cny=Decimal(-100),
+        actor="yl",
+    )
+    detail = service.get_period_detail(period)
+    assert {
+        item["partner"]: item["due_cny"]
+        for item in detail["allocations"]
+    } == {"洁云": Decimal("0.00"), "苏姐": Decimal("0.00")}
+    assert detail["display_status"] == "loss"
+
+
+def test_partial_payment_updates_partner_outstanding(sharing):
+    service, _ = sharing
+    service.create_agreement(
+        effective_from=date(2026, 1, 1),
+        shares={"洁云": Decimal("0.60"), "苏姐": Decimal("0.40")},
+        actor="yl",
+    )
+    period = service.create_period(
+        starts_on=date(2026, 8, 1),
+        ends_on=date(2026, 8, 31),
+        net_profit_cny=Decimal(1000),
+        actor="yl",
+    )
+    service.confirm_period(period, actor="yl")
+    service.record_payment(
+        period_id=period,
+        partner="洁云",
+        amount_cny=Decimal(300),
+        paid_on=date(2026, 9, 1),
+        status="paid",
+        note="首笔",
+        actor="yl",
+    )
+    detail = service.get_period_detail(period)
+    allocation = next(
+        item for item in detail["allocations"] if item["partner"] == "洁云"
+    )
+    assert allocation["due_cny"] == Decimal("600.00")
+    assert allocation["paid_cny"] == Decimal("300.00")
+    assert allocation["outstanding_cny"] == Decimal("300.00")
+    assert detail["display_status"] == "paying"
+
+
 def test_confirm_period_and_record_partial_payment(sharing):
     service, database = sharing
     service.create_agreement(

@@ -2403,6 +2403,9 @@ def render_profit_sharing_page(
     # 拉取各模块数据
     current_agreement = service.get_current_agreement()
     periods = service.list_profit_periods()
+    period_details = {
+        item["id"]: service.get_period_detail(item["id"]) for item in periods
+    }
     payments = service.list_profit_payments()
 
     # 当月净利润明细：起始日期为当月第一天，结束日期为传入的数据日期
@@ -2480,14 +2483,21 @@ def render_profit_sharing_page(
               <td>{html.escape(str(item['starts_on']))}</td>
               <td>{html.escape(str(item['ends_on']))}</td>
               <td class="number{' text-profit-positive' if _to_decimal(item['net_profit_cny']) >= 0 else ' text-profit-negative'}">{_format_amount(item['net_profit_cny'])}</td>
-              <td>{_render_status_tag(item['status'])}</td>
+              <td class="number">{_format_amount(period_details[item['id']]['distributable_profit_cny'])}</td>
+              <td>{_render_status_tag(period_details[item['id']]['display_status'])}</td>
               <td>{_render_evidence_links(item['evidence_ids'])}</td>
             </tr>
+            <tr><td colspan="7">{
+                ' · '.join(
+                    f"{html.escape(detail['partner'])}: 应分 {_format_amount(detail['due_cny'])} / 已付 {_format_amount(detail['paid_cny'])} / 未付 {_format_amount(detail['outstanding_cny'])}"
+                    for detail in period_details[item['id']]['allocations']
+                ) or '暂无分配明细'
+            }</td></tr>
             """
             for item in periods
         )
     else:
-        period_rows = '<tr><td colspan="6" class="empty-state">暂无分润期间记录</td></tr>'
+        period_rows = '<tr><td colspan="7" class="empty-state">暂无分润期间记录</td></tr>'
 
     # 渲染净利润明细面板：列出收入、各项成本与最终净利润
     breakdown_items = "".join(
@@ -2573,7 +2583,7 @@ def render_profit_sharing_page(
           <thead>
             <tr>
               <th>期间 ID</th><th>起始日期</th><th>结束日期</th>
-              <th>净利润 (CNY)</th><th>状态</th><th>凭证</th>
+              <th>净利润 (CNY)</th><th>可分配利润</th><th>状态</th><th>凭证</th>
             </tr>
           </thead>
           <tbody>{period_rows}</tbody>
