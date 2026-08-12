@@ -3,11 +3,18 @@ from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 from urllib.parse import urlencode
 
+from adwatch.accounting.exchange_rates import AccountingExchangeRateService
 from adwatch.analytics.recalculation import AnalysisRecalculationService
 from adwatch.approval.service import ApprovalError, ApprovalService
 from adwatch.inventory.models import PurchaseLine
 from adwatch.inventory.service import InventoryError, InventoryService
-from adwatch.ledger.models import ExpenseDraft
+from adwatch.ledger.models import (
+    AdFundingDraft,
+    CapitalDraft,
+    ExpenseDraft,
+    ManualIncomeDraft,
+    ReviewCostDraft,
+)
 from adwatch.ledger.service import LedgerError, LedgerService
 from adwatch.orders.fulfillment import FulfillmentService
 from adwatch.orders.repository import OrderRepository
@@ -66,6 +73,19 @@ class DashboardRouter:
         self.balances = balances
         self.strategy_rule = strategy_rule
         self.approval = approval
+
+    def _accounting_rate(self, form: dict[str, str], occurred_on: date):
+        explicit = form.get("rate_to_cny", "").strip()
+        if explicit:
+            if not form.get("rate_reason", "").strip():
+                raise ValueError("rate_reason is required for a line rate override")
+            return Decimal(explicit), occurred_on, "manual_line_override"
+        if self.database is None:
+            raise ValueError("database is required to resolve exchange rates")
+        resolved = AccountingExchangeRateService(self.database).resolve(
+            form["currency"], occurred_on
+        )
+        return resolved.rate, resolved.source_date, resolved.source
 
     def post(self, path: str, form: dict[str, str]) -> RouteResponse:
         if form.get("csrf_token") != self.csrf_token:
@@ -374,13 +394,33 @@ class DashboardRouter:
                 )
                 return RouteResponse(303, location="/ad-funds")
             if path == "/capital":
-                self.ledger.create_capital(
-                    partner=form["partner"],
-                    entry_type=form["entry_type"],
-                    amount=Decimal(form["amount"]),
-                    occurred_on=occurred_on,
-                    actor="local-web",
-                )
+                if "currency" in form or "amount_original" in form:
+                    rate, rate_date, rate_source = self._accounting_rate(
+                        form, occurred_on
+                    )
+                    self.ledger.create_capital_draft(
+                        CapitalDraft(
+                            partner=form["partner"],
+                            entry_type=form["entry_type"],
+                            entry_name=form.get("entry_name", ""),
+                            amount_original=Decimal(form["amount_original"]),
+                            currency=form["currency"],
+                            rate_to_cny=rate,
+                            occurred_on=occurred_on,
+                            rate_date=rate_date,
+                            rate_source=rate_source,
+                            note=form.get("note", ""),
+                        ),
+                        actor="local-web",
+                    )
+                else:
+                    self.ledger.create_capital(
+                        partner=form["partner"],
+                        entry_type=form["entry_type"],
+                        amount=Decimal(form["amount"]),
+                        occurred_on=occurred_on,
+                        actor="local-web",
+                    )
                 return RouteResponse(303, location="/ad-funds")
             if path == "/withdrawals":
                 self.ledger.create_withdrawal(
@@ -392,25 +432,95 @@ class DashboardRouter:
                 )
                 return RouteResponse(303, location="/ad-funds")
             if path == "/ad-funding":
-                self.ledger.create_ad_funding(
-                    platform=form["platform"],
-                    store=form["store"],
-                    entry_type=form["entry_type"],
-                    amount=Decimal(form["amount"]),
-                    occurred_on=occurred_on,
-                    source=form["source"],
-                    actor="local-web",
-                )
+                if "currency" in form or "paid_amount_original" in form:
+                    rate, rate_date, rate_source = self._accounting_rate(
+                        form, occurred_on
+                    )
+                    self.ledger.create_ad_funding_draft(
+                        AdFundingDraft(
+                            platform=form["platform"],
+                            store=form["store"],
+                            entry_type=form["entry_type"],
+                            paid_amount_original=Decimal(
+                                form["paid_amount_original"]
+                            ),
+                            credited_amount_original=Decimal(
+                                form["credited_amount_original"]
+                            ),
+                            currency=form["currency"],
+                            rate_to_cny=rate,
+                            occurred_on=occurred_on,
+                            rate_date=rate_date,
+                            rate_source=rate_source,
+                            source=form["source"],
+                        ),
+                        actor="local-web",
+                    )
+                else:
+                    self.ledger.create_ad_funding(
+                        platform=form["platform"],
+                        store=form["store"],
+                        entry_type=form["entry_type"],
+                        amount=Decimal(form["amount"]),
+                        occurred_on=occurred_on,
+                        source=form["source"],
+                        actor="local-web",
+                    )
                 return RouteResponse(303, location="/ad-funds")
             if path == "/review-costs":
-                self.ledger.create_review_order_cost(
-                    platform=form["platform"],
-                    store=form["store"],
-                    order_id=form["order_id"],
-                    seller_sku=form.get("seller_sku", ""),
-                    goods_cost=Decimal(form["goods_cost"]),
-                    service_fee=Decimal(form["service_fee"]),
-                    occurred_on=occurred_on,
+                if "currency" in form or "goods_cost_original" in form:
+                    rate, rate_date, rate_source = self._accounting_rate(
+                        form, occurred_on
+                    )
+                    self.ledger.create_review_order_cost_draft(
+                        ReviewCostDraft(
+                            platform=form["platform"],
+                            store=form["store"],
+                            order_id=form["order_id"],
+                            seller_sku=form.get("seller_sku", ""),
+                            goods_cost_original=Decimal(
+                                form["goods_cost_original"]
+                            ),
+                            service_fee_original=Decimal(
+                                form["service_fee_original"]
+                            ),
+                            currency=form["currency"],
+                            rate_to_cny=rate,
+                            occurred_on=occurred_on,
+                            rate_date=rate_date,
+                            rate_source=rate_source,
+                        ),
+                        actor="local-web",
+                    )
+                else:
+                    self.ledger.create_review_order_cost(
+                        platform=form["platform"],
+                        store=form["store"],
+                        order_id=form["order_id"],
+                        seller_sku=form.get("seller_sku", ""),
+                        goods_cost=Decimal(form["goods_cost"]),
+                        service_fee=Decimal(form["service_fee"]),
+                        occurred_on=occurred_on,
+                        actor="local-web",
+                    )
+                return RouteResponse(303, location="/ad-funds")
+            if path == "/manual-income":
+                rate, rate_date, rate_source = self._accounting_rate(
+                    form, occurred_on
+                )
+                self.ledger.create_manual_income(
+                    ManualIncomeDraft(
+                        platform=form.get("platform", ""),
+                        store=form.get("store", ""),
+                        order_id=form.get("order_id", ""),
+                        occurred_on=occurred_on,
+                        amount_original=Decimal(form["amount_original"]),
+                        currency=form["currency"],
+                        rate_to_cny=rate,
+                        rate_date=rate_date,
+                        rate_source=rate_source,
+                        note=form.get("note", ""),
+                    ),
                     actor="local-web",
                 )
                 return RouteResponse(303, location="/ad-funds")

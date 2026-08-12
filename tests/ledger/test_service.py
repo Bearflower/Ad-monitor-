@@ -4,7 +4,13 @@ from decimal import Decimal
 import pytest
 
 from adwatch.evidence.service import EvidenceService
-from adwatch.ledger.models import ExpenseDraft
+from adwatch.ledger.models import (
+    AdFundingDraft,
+    CapitalDraft,
+    ExpenseDraft,
+    ManualIncomeDraft,
+    ReviewCostDraft,
+)
 from adwatch.ledger.service import LedgerError, LedgerService
 from adwatch.storage.db import Database
 
@@ -121,6 +127,123 @@ def test_capital_withdrawal_ad_funding_and_review_cost_are_writable(service):
             "SELECT excluded_from_real_metrics FROM review_order_costs"
         ).fetchone()
     assert row["excluded_from_real_metrics"] == 1
+
+
+def test_multicurrency_operating_facts_freeze_rate_and_cash(service):
+    ledger, database = service
+    income = ledger.create_manual_income(
+        ManualIncomeDraft(
+            platform="shopee",
+            store="shop",
+            order_id="O-MULTI",
+            occurred_on=date(2026, 8, 5),
+            amount_original=Decimal(100),
+            currency="SGD",
+            rate_to_cny=Decimal("5.60"),
+            rate_date=date(2026, 8, 1),
+            rate_source="monthly_override",
+            note="结算补录",
+        ),
+        actor="yl",
+    )
+    funding = ledger.create_ad_funding_draft(
+        AdFundingDraft(
+            platform="shopee",
+            store="shop",
+            entry_type="recharge",
+            paid_amount_original=Decimal(642),
+            credited_amount_original=Decimal(600),
+            currency="THB",
+            rate_to_cny=Decimal("0.20"),
+            occurred_on=date(2026, 8, 5),
+            rate_date=date(2026, 8, 1),
+            rate_source="monthly_override",
+            source="manual",
+        ),
+        actor="yl",
+    )
+    review = ledger.create_review_order_cost_draft(
+        ReviewCostDraft(
+            platform="shopee",
+            store="shop",
+            order_id="R-MULTI",
+            seller_sku="SKU-1",
+            goods_cost_original=Decimal("190.93"),
+            service_fee_original=Decimal(13),
+            currency="CNY",
+            rate_to_cny=Decimal(1),
+            occurred_on=date(2026, 8, 5),
+            rate_date=date(2026, 8, 5),
+            rate_source="identity",
+        ),
+        actor="yl",
+    )
+    capital = ledger.create_capital_draft(
+        CapitalDraft(
+            partner="洁云",
+            entry_type="paid_in",
+            entry_name="虾皮下店",
+            amount_original=Decimal(450),
+            currency="CNY",
+            rate_to_cny=Decimal(1),
+            occurred_on=date(2026, 8, 5),
+            rate_date=date(2026, 8, 5),
+            rate_source="identity",
+            note="",
+        ),
+        actor="yl",
+    )
+    assert all((income, funding, review, capital))
+    with database.connect() as connection:
+        assert connection.execute(
+            "SELECT amount_cny FROM manual_income_entries"
+        ).fetchone()[0] == "560.00"
+        assert tuple(
+            connection.execute(
+                "SELECT amount_cny, credited_amount_cny "
+                "FROM ad_funding_entries WHERE id=?",
+                (funding,),
+            ).fetchone()
+        ) == ("128.40", "120.00")
+        assert tuple(
+            connection.execute(
+                "SELECT goods_cost_cny, service_fee_cny "
+                "FROM review_order_costs WHERE id=?",
+                (review,),
+            ).fetchone()
+        ) == ("190.93", "13.00")
+        cash = connection.execute(
+            "SELECT SUM(CAST(amount_cny AS REAL)) FROM cash_movements"
+        ).fetchone()[0]
+    assert Decimal(str(cash)) == Decimal("677.67")
+
+
+def test_ad_gift_credits_balance_without_creating_cash(service):
+    ledger, database = service
+    entry_id = ledger.create_ad_funding_draft(
+        AdFundingDraft(
+            platform="shopee",
+            store="shop",
+            entry_type="gift",
+            paid_amount_original=Decimal(0),
+            credited_amount_original=Decimal(100),
+            currency="THB",
+            rate_to_cny=Decimal("0.2"),
+            occurred_on=date(2026, 8, 5),
+            source="platform",
+        ),
+        actor="yl",
+    )
+    ledger.reverse_ad_funding(entry_id, actor="yl", reason="录错")
+    with database.connect() as connection:
+        row = connection.execute(
+            "SELECT status, credited_amount_cny FROM ad_funding_entries"
+        ).fetchone()
+        cash_count = connection.execute(
+            "SELECT COUNT(*) FROM cash_movements"
+        ).fetchone()[0]
+    assert tuple(row) == ("reversed", "20.00")
+    assert cash_count == 0
 
 
 def test_expense_rejects_repeated_confirm_and_reversal(service):

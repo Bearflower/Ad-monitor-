@@ -5,10 +5,15 @@ import uuid
 from datetime import UTC, date, datetime
 from decimal import ROUND_HALF_UP, Decimal
 
+from adwatch.accounting.money import convert_to_cny, normalize_currency
 from adwatch.ledger.models import (
+    AdFundingDraft,
+    CapitalDraft,
     ExpenseDraft,
     ExpenseEntry,
     FinancialAdjustment,
+    ManualIncomeDraft,
+    ReviewCostDraft,
 )
 from adwatch.storage.db import Database
 
@@ -170,6 +175,12 @@ class LedgerService:
             raise LedgerError("amount must be positive")
         return _money(amount)
 
+    @staticmethod
+    def _non_negative(amount: Decimal) -> Decimal:
+        if amount < 0:
+            raise LedgerError("amount must not be negative")
+        return _money(amount)
+
     def create_capital(
         self,
         *,
@@ -179,10 +190,29 @@ class LedgerService:
         occurred_on,
         actor: str,
     ) -> str:
-        partner = self._required(partner, "partner")
-        entry_type = self._required(entry_type, "entry type")
+        return self.create_capital_draft(
+            CapitalDraft(
+                occurred_on=occurred_on,
+                partner=partner,
+                entry_type=entry_type,
+                entry_name="",
+                amount_original=amount,
+                currency="CNY",
+                rate_to_cny=Decimal(1),
+                rate_date=occurred_on,
+                rate_source="legacy",
+            ),
+            actor=actor,
+        )
+
+    def create_capital_draft(self, draft: CapitalDraft, *, actor: str) -> str:
+        partner = self._required(draft.partner, "partner")
+        entry_type = self._required(draft.entry_type, "entry type")
         actor = self._required(actor, "actor")
-        value = self._positive(amount)
+        amount_original = self._positive(draft.amount_original)
+        value = convert_to_cny(amount_original, draft.rate_to_cny)
+        currency = normalize_currency(draft.currency)
+        rate_date = draft.rate_date or draft.occurred_on
         entry_id = str(uuid.uuid4())
         now = datetime.now(UTC).isoformat()
         with self.database.transaction() as connection:
@@ -191,22 +221,37 @@ class LedgerService:
                 INSERT INTO capital_entries(
                     id, partner, entry_type, amount_original, currency,
                     rate_to_cny, amount_cny, occurred_on, status,
-                    created_at, created_by
-                ) VALUES (?, ?, ?, ?, 'CNY', '1', ?, ?, 'confirmed', ?, ?)
+                    created_at, created_by, entry_name, rate_date,
+                    rate_source, note
+                ) VALUES (
+                    ?, ?, ?, ?, ?, ?, ?, ?, 'confirmed', ?, ?, ?, ?, ?, ?
+                )
                 """,
                 (
                     entry_id,
                     partner,
                     entry_type,
+                    str(amount_original),
+                    currency,
+                    str(draft.rate_to_cny),
                     str(value),
-                    str(value),
-                    occurred_on.isoformat(),
+                    draft.occurred_on.isoformat(),
                     now,
                     actor,
+                    draft.entry_name.strip(),
+                    rate_date.isoformat(),
+                    draft.rate_source,
+                    draft.note,
                 ),
             )
             self._cash(
-                connection, occurred_on, "capital_in", value, "capital", entry_id, now
+                connection,
+                draft.occurred_on,
+                "capital_in",
+                value,
+                "capital",
+                entry_id,
+                now,
             )
             self._audit_generic(
                 connection, "capital", entry_id, actor, {"status": "confirmed"}, now
@@ -278,12 +323,41 @@ class LedgerService:
         source: str,
         actor: str,
     ) -> str:
-        platform = self._required(platform, "platform")
-        store = self._required(store, "store")
-        entry_type = self._required(entry_type, "entry type")
-        source = self._required(source, "source")
+        return self.create_ad_funding_draft(
+            AdFundingDraft(
+                occurred_on=occurred_on,
+                platform=platform,
+                store=store,
+                entry_type=entry_type,
+                paid_amount_original=(
+                    Decimal(0) if entry_type == "gift" else amount
+                ),
+                credited_amount_original=amount,
+                currency="CNY",
+                rate_to_cny=Decimal(1),
+                source=source,
+                rate_date=occurred_on,
+                rate_source="legacy",
+            ),
+            actor=actor,
+        )
+
+    def create_ad_funding_draft(
+        self, draft: AdFundingDraft, *, actor: str
+    ) -> str:
+        platform = self._required(draft.platform, "platform")
+        store = self._required(draft.store, "store")
+        entry_type = self._required(draft.entry_type, "entry type")
+        source = self._required(draft.source, "source")
         actor = self._required(actor, "actor")
-        value = self._positive(amount)
+        paid_original = self._non_negative(draft.paid_amount_original)
+        credited_original = self._non_negative(draft.credited_amount_original)
+        if paid_original == 0 and credited_original == 0:
+            raise LedgerError("paid or credited amount must be positive")
+        currency = normalize_currency(draft.currency)
+        paid_cny = convert_to_cny(paid_original, draft.rate_to_cny)
+        credited_cny = convert_to_cny(credited_original, draft.rate_to_cny)
+        rate_date = draft.rate_date or draft.occurred_on
         entry_id = str(uuid.uuid4())
         now = datetime.now(UTC).isoformat()
         with self.database.transaction() as connection:
@@ -292,9 +366,11 @@ class LedgerService:
                 INSERT INTO ad_funding_entries(
                     id, platform, store, entry_type, amount_original,
                     currency, rate_to_cny, amount_cny, occurred_on,
-                    source, status, created_at, created_by
+                    source, status, created_at, created_by,
+                    credited_amount_original, credited_amount_cny,
+                    rate_date, rate_source
                 ) VALUES (
-                    ?, ?, ?, ?, ?, 'CNY', '1', ?, ?, ?, 'confirmed', ?, ?
+                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'confirmed', ?, ?, ?, ?, ?, ?
                 )
                 """,
                 (
@@ -302,24 +378,31 @@ class LedgerService:
                     platform,
                     store,
                     entry_type,
-                    str(value),
-                    str(value),
-                    occurred_on.isoformat(),
+                    str(paid_original),
+                    currency,
+                    str(draft.rate_to_cny),
+                    str(paid_cny),
+                    draft.occurred_on.isoformat(),
                     source,
                     now,
                     actor,
+                    str(credited_original),
+                    str(credited_cny),
+                    rate_date.isoformat(),
+                    draft.rate_source,
                 ),
             )
-            delta = value if entry_type in {"refund", "gift"} else -value
-            self._cash(
-                connection,
-                occurred_on,
-                "ad_funding",
-                delta,
-                "ad_funding",
-                entry_id,
-                now,
-            )
+            if paid_cny:
+                delta = paid_cny if entry_type == "refund" else -paid_cny
+                self._cash(
+                    connection,
+                    draft.occurred_on,
+                    "ad_funding",
+                    delta,
+                    "ad_funding",
+                    entry_id,
+                    now,
+                )
             self._audit_generic(
                 connection,
                 "ad_funding",
@@ -342,40 +425,76 @@ class LedgerService:
         occurred_on,
         actor: str,
     ) -> str:
-        platform = self._required(platform, "platform")
-        store = self._required(store, "store")
-        order_id = self._required(order_id, "order id")
+        return self.create_review_order_cost_draft(
+            ReviewCostDraft(
+                occurred_on=occurred_on,
+                platform=platform,
+                store=store,
+                order_id=order_id,
+                seller_sku=seller_sku,
+                goods_cost_original=goods_cost,
+                service_fee_original=service_fee,
+                currency="CNY",
+                rate_to_cny=Decimal(1),
+                rate_date=occurred_on,
+                rate_source="legacy",
+            ),
+            actor=actor,
+        )
+
+    def create_review_order_cost_draft(
+        self, draft: ReviewCostDraft, *, actor: str
+    ) -> str:
+        platform = self._required(draft.platform, "platform")
+        store = self._required(draft.store, "store")
+        order_id = self._required(draft.order_id, "order id")
         actor = self._required(actor, "actor")
-        if goods_cost < 0 or service_fee < 0 or goods_cost + service_fee <= 0:
+        goods_original = self._non_negative(draft.goods_cost_original)
+        fee_original = self._non_negative(draft.service_fee_original)
+        if goods_original + fee_original <= 0:
             raise LedgerError("review order cost must be positive")
+        currency = normalize_currency(draft.currency)
+        goods_cny = convert_to_cny(goods_original, draft.rate_to_cny)
+        fee_cny = convert_to_cny(fee_original, draft.rate_to_cny)
         entry_id = str(uuid.uuid4())
         now = datetime.now(UTC).isoformat()
-        total = _money(goods_cost + service_fee)
+        total = _money(goods_cny + fee_cny)
+        rate_date = draft.rate_date or draft.occurred_on
         with self.database.transaction() as connection:
             connection.execute(
                 """
                 INSERT INTO review_order_costs(
                     id, platform, store, order_id, seller_sku,
                     goods_cost_cny, service_fee_cny, occurred_on,
-                    status, created_at, created_by
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'confirmed', ?, ?)
+                    status, created_at, created_by, goods_cost_original,
+                    service_fee_original, currency, rate_to_cny,
+                    rate_date, rate_source
+                ) VALUES (
+                    ?, ?, ?, ?, ?, ?, ?, ?, 'confirmed', ?, ?, ?, ?, ?, ?, ?, ?
+                )
                 """,
                 (
                     entry_id,
                     platform,
                     store,
                     order_id,
-                    seller_sku,
-                    str(_money(goods_cost)),
-                    str(_money(service_fee)),
-                    occurred_on.isoformat(),
+                    draft.seller_sku,
+                    str(goods_cny),
+                    str(fee_cny),
+                    draft.occurred_on.isoformat(),
                     now,
                     actor,
+                    str(goods_original),
+                    str(fee_original),
+                    currency,
+                    str(draft.rate_to_cny),
+                    rate_date.isoformat(),
+                    draft.rate_source,
                 ),
             )
             self._cash(
                 connection,
-                occurred_on,
+                draft.occurred_on,
                 "review_order_payment",
                 -total,
                 "review_order",
@@ -388,6 +507,64 @@ class LedgerService:
                 entry_id,
                 actor,
                 {"status": "confirmed", "excluded": True},
+                now,
+            )
+        return entry_id
+
+    def create_manual_income(
+        self, draft: ManualIncomeDraft, *, actor: str
+    ) -> str:
+        actor = self._required(actor, "actor")
+        amount_original = self._positive(draft.amount_original)
+        currency = normalize_currency(draft.currency)
+        amount_cny = convert_to_cny(amount_original, draft.rate_to_cny)
+        rate_date = draft.rate_date or draft.occurred_on
+        entry_id = str(uuid.uuid4())
+        now = datetime.now(UTC).isoformat()
+        with self.database.transaction() as connection:
+            connection.execute(
+                """
+                INSERT INTO manual_income_entries(
+                    id, platform, store, order_id, occurred_on,
+                    amount_original, currency, rate_to_cny, amount_cny,
+                    rate_date, rate_source, status, note, created_by,
+                    created_at
+                ) VALUES (
+                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'confirmed', ?, ?, ?
+                )
+                """,
+                (
+                    entry_id,
+                    draft.platform.strip(),
+                    draft.store.strip(),
+                    draft.order_id.strip(),
+                    draft.occurred_on.isoformat(),
+                    str(amount_original),
+                    currency,
+                    str(draft.rate_to_cny),
+                    str(amount_cny),
+                    rate_date.isoformat(),
+                    draft.rate_source,
+                    draft.note,
+                    actor,
+                    now,
+                ),
+            )
+            self._cash(
+                connection,
+                draft.occurred_on,
+                "manual_income",
+                amount_cny,
+                "manual_income",
+                entry_id,
+                now,
+            )
+            self._audit_generic(
+                connection,
+                "manual_income",
+                entry_id,
+                actor,
+                {"status": "confirmed"},
                 now,
             )
         return entry_id
@@ -435,6 +612,18 @@ class LedgerService:
             table="review_order_costs",
             object_type="review_order",
             source_type="review_order",
+            entry_id=entry_id,
+            actor=actor,
+            reason=reason,
+        )
+
+    def reverse_manual_income(
+        self, entry_id: str, *, actor: str, reason: str
+    ) -> None:
+        self._reverse_entry(
+            table="manual_income_entries",
+            object_type="manual_income",
+            source_type="manual_income",
             entry_id=entry_id,
             actor=actor,
             reason=reason,
@@ -628,14 +817,13 @@ class LedgerService:
                 """,
                 (source_type, entry_id),
             ).fetchone()
-            if original_cash is None:
-                raise LedgerError("original cash fact is missing")
-            already_reversed = connection.execute(
-                "SELECT 1 FROM cash_movements WHERE reversal_of=?",
-                (original_cash["id"],),
-            ).fetchone()
-            if already_reversed is not None:
-                raise LedgerError(f"{object_type} entry already reversed")
+            if original_cash is not None:
+                already_reversed = connection.execute(
+                    "SELECT 1 FROM cash_movements WHERE reversal_of=?",
+                    (original_cash["id"],),
+                ).fetchone()
+                if already_reversed is not None:
+                    raise LedgerError(f"{object_type} entry already reversed")
             connection.execute(
                 f"""
                 UPDATE {table}
@@ -643,24 +831,25 @@ class LedgerService:
                 """,
                 (reason, entry_id),
             )
-            connection.execute(
-                """
-                INSERT INTO cash_movements(
-                    id, occurred_on, movement_type, amount_cny,
-                    source_type, source_id, reversal_of, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    str(uuid.uuid4()),
-                    original_cash["occurred_on"],
-                    f"{original_cash['movement_type']}_reversal",
-                    str(-_money(Decimal(original_cash["amount_cny"]))),
-                    source_type,
-                    entry_id,
-                    original_cash["id"],
-                    now,
-                ),
-            )
+            if original_cash is not None:
+                connection.execute(
+                    """
+                    INSERT INTO cash_movements(
+                        id, occurred_on, movement_type, amount_cny,
+                        source_type, source_id, reversal_of, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        str(uuid.uuid4()),
+                        original_cash["occurred_on"],
+                        f"{original_cash['movement_type']}_reversal",
+                        str(-_money(Decimal(original_cash["amount_cny"]))),
+                        source_type,
+                        entry_id,
+                        original_cash["id"],
+                        now,
+                    ),
+                )
             self._audit_generic(
                 connection,
                 object_type,

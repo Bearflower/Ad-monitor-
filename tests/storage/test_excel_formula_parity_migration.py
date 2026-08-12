@@ -23,7 +23,7 @@ def test_migration_40_adds_formula_parity_columns_and_monthly_rates(tmp_path):
         review = _columns(connection, "review_order_costs")
         receipts = _columns(connection, "purchase_receipts")
         lines = _columns(connection, "purchase_lines")
-    assert latest == 40
+    assert latest == 41
     assert "monthly_exchange_rate_overrides" in tables
     assert {
         "credited_amount_original",
@@ -71,3 +71,29 @@ def test_migration_40_requires_currency_and_rate_for_new_purchase_rows(tmp_path)
         }
     assert info["currency"] == 1
     assert info["rate_to_cny"] == 1
+
+
+def test_migration_41_creates_manual_income_entries(tmp_path):
+    database = Database(tmp_path / "manual-income.sqlite3")
+    database.migrate()
+    with database.connect() as connection:
+        latest = connection.execute(
+            "SELECT MAX(version) FROM schema_migrations"
+        ).fetchone()[0]
+        columns = _columns(connection, "manual_income_entries")
+    assert latest == 41
+    assert {
+        "platform",
+        "store",
+        "order_id",
+        "occurred_on",
+        "amount_original",
+        "currency",
+        "rate_to_cny",
+        "amount_cny",
+        "rate_date",
+        "rate_source",
+        "status",
+        "note",
+        "created_by",
+    } <= columns

@@ -2,6 +2,7 @@ from datetime import date
 from decimal import Decimal
 from urllib.parse import parse_qs, urlparse
 
+from adwatch.accounting.exchange_rates import AccountingExchangeRateService
 from adwatch.dashboard.routes import DashboardRouter
 from adwatch.inventory.service import InventoryService
 from adwatch.ledger.service import LedgerService
@@ -162,6 +163,41 @@ def test_finance_write_routes_cover_capital_withdrawal_funding_and_review(tmp_pa
             },
         )
         assert response.status == 303
+
+
+def test_manual_income_route_resolves_monthly_rate(tmp_path):
+    database = Database(tmp_path / "web.sqlite3")
+    database.migrate()
+    AccountingExchangeRateService(database).set_monthly_override(
+        currency="SGD",
+        year_month="2026-08",
+        rate_to_cny=Decimal("5.6"),
+        source="manual",
+        note="",
+        actor="yl",
+    )
+    router = DashboardRouter(
+        LedgerService(database), csrf_token="secret", database=database
+    )
+    response = router.post(
+        "/manual-income",
+        {
+            "csrf_token": "secret",
+            "occurred_on": "2026-08-05",
+            "platform": "shopee",
+            "store": "shop",
+            "order_id": "O-1",
+            "amount_original": "100",
+            "currency": "SGD",
+            "note": "",
+        },
+    )
+    assert response.status == 303
+    with database.connect() as connection:
+        row = connection.execute(
+            "SELECT amount_cny, rate_source FROM manual_income_entries"
+        ).fetchone()
+    assert tuple(row) == ("560.00", "monthly_override")
 
 
 def test_inventory_sku_cost_and_profit_routes_are_writable(tmp_path):

@@ -2157,4 +2157,33 @@ MIGRATIONS = [
             line_cost_original=line_cost_cny;
         """,
     ),
+    (
+        41,
+        """
+        CREATE TABLE manual_income_entries (
+            id TEXT PRIMARY KEY,
+            platform TEXT NOT NULL DEFAULT '',
+            store TEXT NOT NULL DEFAULT '',
+            order_id TEXT NOT NULL DEFAULT '',
+            occurred_on TEXT NOT NULL,
+            amount_original TEXT NOT NULL,
+            currency TEXT NOT NULL,
+            rate_to_cny TEXT NOT NULL,
+            amount_cny TEXT NOT NULL,
+            rate_date TEXT NOT NULL,
+            rate_source TEXT NOT NULL,
+            status TEXT NOT NULL CHECK(status IN ('confirmed', 'reversed')),
+            note TEXT NOT NULL DEFAULT '',
+            created_by TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            reversal_reason TEXT,
+            UNIQUE(
+                platform, store, order_id, occurred_on,
+                amount_original, currency
+            )
+        );
+        CREATE INDEX idx_manual_income_occurred
+        ON manual_income_entries(occurred_on, status);
+        """,
+    ),
 ]
