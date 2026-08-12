@@ -5,6 +5,7 @@ import uuid
 from datetime import UTC, date, datetime
 from decimal import ROUND_HALF_UP, Decimal
 
+from adwatch.accounting.operating_statement import OperatingStatementService
 from adwatch.storage.db import Database
 
 
@@ -179,6 +180,23 @@ class ProfitSharingService:
         return period_id
 
     def create_period_from_ledger(
+        self, *, starts_on: date, ends_on: date, actor: str
+    ) -> str:
+        statement = OperatingStatementService(self.database).between(
+            starts_on, ends_on
+        )
+        if statement.net_profit_cny is None:
+            raise ProfitSharingError(
+                "profit period has pending accounting inputs"
+            )
+        return self.create_period(
+            starts_on=starts_on,
+            ends_on=ends_on,
+            net_profit_cny=statement.net_profit_cny,
+            actor=actor,
+        )
+
+    def _legacy_create_period_from_ledger(
         self, *, starts_on: date, ends_on: date, actor: str
     ) -> str:
         start, end = starts_on.isoformat(), ends_on.isoformat()
@@ -743,6 +761,26 @@ class ProfitSharingService:
         返回字段: revenue, cogs, platform_fee, ad_spend,
                   operating_expenses, review_costs, net_profit
         """
+        statement = OperatingStatementService(self.database).between(
+            starts_on, ends_on
+        )
+        return {
+            "revenue": statement.revenue_cny,
+            "income_adjustments": Decimal("0.00"),
+            "cogs": statement.cogs_cny,
+            "platform_fee": statement.platform_fee_cny,
+            "ad_spend": statement.ad_spend_cny,
+            "operating_expenses": statement.operating_expense_cny,
+            "review_costs": statement.review_cost_cny,
+            "net_profit": statement.net_profit_cny,
+        }
+
+    def _legacy_calculate_net_profit_breakdown(
+        self,
+        *,
+        starts_on: date,
+        ends_on: date,
+    ) -> dict:
         start, end = starts_on.isoformat(), ends_on.isoformat()
         with self.database.connect() as connection:
             # 收入: 结算记录总额

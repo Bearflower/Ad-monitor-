@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from datetime import date, timedelta
 from decimal import Decimal
 
+from adwatch.accounting.operating_statement import OperatingStatementService
 from adwatch.reporting.break_even import (
     BreakEvenTarget,
     calculate_break_even,
@@ -1295,7 +1296,6 @@ class ReportReadModel:
             ),
             "sku_and_other_cost_cny": total_sku_cost,
         }
-
         # 环比数据
         prev_spend = (
             Decimal(str(prev_row["spend"] or 0))
@@ -1696,6 +1696,21 @@ class ReportReadModel:
             ),
             "sku_and_other_cost_cny": total_sku_cost,
         }
+        operating_statement = OperatingStatementService(
+            self.database
+        ).monthly(year, month)
+        totals.update(
+            {
+                "operating_revenue_cny": operating_statement.revenue_cny,
+                "operating_cogs_cny": operating_statement.cogs_cny,
+                "operating_expense_cny": (
+                    operating_statement.operating_expense_cny
+                ),
+                "operating_net_profit_cny": (
+                    operating_statement.net_profit_cny
+                ),
+            }
+        )
 
         # 环比
         prev_spend = (
@@ -1836,6 +1851,7 @@ class ReportReadModel:
                 "healthy_skus": healthy_skus,
                 "losing_skus": losing_skus,
             },
+            "operating_statement": operating_statement,
         }
 
 
