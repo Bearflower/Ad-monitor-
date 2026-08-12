@@ -9,6 +9,7 @@ from decimal import Decimal
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+from adwatch.accounting.excel_preview import ExcelPrototypePreview
 from adwatch.analytics.business_inputs import (
     BusinessInputError,
     export_business_template,
@@ -230,6 +231,9 @@ def build_parser() -> argparse.ArgumentParser:
     import_sku = business_commands.add_parser("import-sku-costs")
     import_sku.add_argument("--file", type=Path, required=True)
     business_commands.add_parser("sync-orders")
+    preview_excel = business_commands.add_parser("preview-accounting-excel")
+    preview_excel.add_argument("--file", type=Path, required=True)
+    preview_excel.add_argument("--format", choices=("text", "json"), default="text")
     sync_rates = business_commands.add_parser("sync-exchange-rates")
     sync_rates.add_argument("--currency", default="THB")
     sync_rates.add_argument(
@@ -1453,6 +1457,33 @@ def main(argv: list[str] | None = None) -> int:
                     )
                     else 0
                 )
+            if args.business_command == "preview-accounting-excel":
+                preview = ExcelPrototypePreview(database).preview(args.file)
+                payload = {
+                    "sheet_names": preview.sheet_names,
+                    "counts": preview.counts,
+                    "rows": [
+                        {
+                            "sheet": row.sheet,
+                            "row_number": row.row_number,
+                            "status": row.status,
+                            "natural_key": row.natural_key,
+                            "message": row.message,
+                        }
+                        for row in preview.rows
+                    ],
+                }
+                if args.format == "json":
+                    print(json.dumps(payload, ensure_ascii=False))
+                else:
+                    print(
+                        "Accounting Excel preview: "
+                        + " ".join(
+                            f"{key}={value}"
+                            for key, value in preview.counts.items()
+                        )
+                    )
+                return 0
             if args.business_command == "set-fulfillment":
                 FulfillmentService(database).set_policy(
                     platform=args.platform,

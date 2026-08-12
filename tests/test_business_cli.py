@@ -1,4 +1,5 @@
 import csv
+import json
 from datetime import date
 from decimal import Decimal
 
@@ -65,6 +66,30 @@ def test_business_export_template_cli(tmp_path, monkeypatch, capsys):
     assert "Exported 1 business input rows" in capsys.readouterr().out
     with output.open(encoding="utf-8-sig", newline="") as handle:
         assert next(iter(csv.DictReader(handle)))["campaign_id"] == "campaign-1"
+
+
+def test_business_preview_excel_prints_json_without_importing(
+    tmp_path, monkeypatch, capsys
+):
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "收入明细"
+    sheet.append(["日期", "平台", "订单编号", "结算金额(SGD)", "备注"])
+    sheet.append([date(2026, 8, 5), "Shopee", "O-1", 100, ""])
+    source = tmp_path / "prototype.xlsx"
+    workbook.save(source)
+    settings = _settings(tmp_path)
+    monkeypatch.setattr(Settings, "from_env", lambda: settings)
+    assert main([
+        "business", "preview-accounting-excel", "--file", str(source),
+        "--format", "json",
+    ]) == 0
+    output = json.loads(capsys.readouterr().out)
+    assert output["counts"]["valid"] == 1
+    with Database(settings.database_path).connect() as connection:
+        assert connection.execute(
+            "SELECT COUNT(*) FROM manual_income_entries"
+        ).fetchone()[0] == 0
 
 
 def test_business_import_cli_reports_validation_error(tmp_path, monkeypatch, capsys):
