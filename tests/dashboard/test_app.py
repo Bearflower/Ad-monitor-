@@ -78,6 +78,10 @@ def test_dashboard_renders_trends_quality_and_execution(tmp_path):
     assert "30 天趋势" in page
     assert "采集运行质量" in page
     assert "审批与执行状态" in page
+    assert "本月经营" in page
+    assert "年度经营" in page
+    assert "/operating-statement?year=2026" in page
+    assert "SGD → CNY" in page
 
 
 def test_dashboard_default_date_tracks_latest_collected_data(tmp_path):

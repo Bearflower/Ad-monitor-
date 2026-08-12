@@ -12,6 +12,11 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
+from adwatch.accounting.exchange_rates import (
+    AccountingExchangeRateService,
+    ExchangeRateInputError,
+)
+from adwatch.accounting.operating_statement import OperatingStatementService
 from adwatch.approval.service import ApprovalService
 from adwatch.dashboard.knowledge import (
     render_knowledge_detail,
@@ -24,6 +29,7 @@ from adwatch.dashboard.views import (
     render_inventory_page,
     render_module_page,
     render_navigation,
+    render_operating_statement_page,
     render_operations_page,
     render_optimization_page,
     render_profit_sharing_page,
@@ -242,6 +248,51 @@ def render_dashboard(
     sku: str = "",
 ) -> str:
     dashboard_snapshot = ReportReadModel(database).dashboard(data_date)
+    statements = OperatingStatementService(database)
+    current_month = statements.monthly(data_date.year, data_date.month)
+    annual = statements.yearly(data_date.year)
+    annual_revenue = sum(
+        (item.revenue_cny for item in annual), Decimal(0)
+    )
+    annual_cost = sum(
+        (item.cogs_cny or Decimal(0) for item in annual), Decimal(0)
+    )
+    annual_expense = sum(
+        (item.operating_expense_cny for item in annual), Decimal(0)
+    )
+    annual_profit = (
+        None
+        if any(item.net_profit_cny is None for item in annual)
+        else sum(
+            (
+                item.net_profit_cny
+                for item in annual
+                if item.net_profit_cny is not None
+            ),
+            Decimal(0),
+        )
+    )
+    rate_service = AccountingExchangeRateService(database)
+    rate_labels = []
+    for currency in ("THB", "SGD"):
+        try:
+            rate = rate_service.resolve(currency, data_date).rate
+            rate_labels.append(f"{currency} → CNY {rate}")
+            if currency == "THB":
+                rate_labels.append(f"CNY → THB {(Decimal(1) / rate):.4f}")
+        except ExchangeRateInputError:
+            rate_labels.append(f"{currency} → CNY 待补数据")
+    operating_cards = f"""
+    <section class="panel">
+      <div class="panel-header"><h2>本月经营</h2><a href="/operating-statement?year={data_date.year}">查看月度经营账</a></div>
+      <p>收入 {_format_cny(current_month.revenue_cny)} · 销售成本 {_format_cny(current_month.cogs_cny)} · 广告实际消耗 {_format_cny(current_month.ad_spend_cny)} · 经营费用 {_format_cny(current_month.operating_expense_cny)} · 净利润 {_format_cny(current_month.net_profit_cny)}</p>
+      <p>{' · '.join(rate_labels)}</p>
+    </section>
+    <section class="panel">
+      <div class="panel-header"><h2>年度经营</h2></div>
+      <p>收入 {_format_cny(annual_revenue)} · 销售成本 {_format_cny(annual_cost)} · 经营费用 {_format_cny(annual_expense)} · 净利润 {_format_cny(annual_profit)}</p>
+    </section>
+    """
     snapshot = dashboard_snapshot.daily
     platform_items = tuple(
         item
@@ -1046,6 +1097,7 @@ def render_dashboard(
       <button type="submit">应用筛选</button>
     </form>
     <section class="kpi-grid" aria-label="平台核心指标">{cards}</section>
+    {operating_cards}
     <section class="panel" aria-labelledby="source-trust-title">
       <div class="panel-header">
         <h2 id="source-trust-title">数据来源与可信度</h2>
@@ -1230,6 +1282,19 @@ def serve(
                 content_type = "text/html; charset=utf-8"
             elif parsed.path == "/operations":
                 body = render_operations_page(csrf_token).encode("utf-8")
+                content_type = "text/html; charset=utf-8"
+            elif parsed.path == "/operating-statement":
+                raw_year = query.get("year", [str(data_date.year)])[0]
+                try:
+                    year = int(raw_year)
+                    if not 2000 <= year <= 2100:
+                        raise ValueError
+                except ValueError:
+                    self.send_error(400, "invalid year")
+                    return
+                body = render_operating_statement_page(
+                    database, year=year, csrf_token=csrf_token
+                ).encode("utf-8")
                 content_type = "text/html; charset=utf-8"
             elif parsed.path == "/knowledge":
                 query = parse_qs(parsed.query).get("q", [""])[0]

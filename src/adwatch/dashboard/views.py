@@ -5,6 +5,7 @@ import json
 from datetime import date
 from decimal import Decimal, InvalidOperation
 
+from adwatch.accounting.operating_statement import OperatingStatementService
 from adwatch.inventory.service import InventoryService
 from adwatch.ledger.service import LedgerService
 from adwatch.profit_sharing.service import ProfitSharingService
@@ -15,6 +16,7 @@ from adwatch.strategy.service import StrategyRuleService
 
 NAVIGATION = (
     ("/", "今日经营"),
+    ("/operating-statement", "月度经营账"),
     ("/optimization", "广告调优"),
     ("/ad-funds", "收入与广告资金"),
     ("/inventory", "SKU与库存"),
@@ -24,6 +26,57 @@ NAVIGATION = (
     ("/knowledge", "知识库"),
     ("/approvals", "审批执行"),
 )
+
+
+def render_operating_statement_page(
+    database: Database, *, year: int, csrf_token: str = ""
+) -> str:
+    statements = OperatingStatementService(database).yearly(year)
+    rows = "".join(
+        f"""
+        <tr data-month="{item.starts_on:%Y-%m}">
+          <td>{item.starts_on:%Y-%m}</td>
+          <td>{_format_amount(item.revenue_cny)}</td>
+          <td>{_format_amount(item.purchase_cash_cny)}</td>
+          <td>{_format_amount(item.cogs_cny)}</td>
+          <td>{_format_amount(item.platform_fee_cny)}</td>
+          <td>{_format_amount(item.ad_recharge_paid_cny)}</td>
+          <td>{_format_amount(item.ad_recharge_credited_cny)}</td>
+          <td>{_format_amount(item.ad_spend_cny)}</td>
+          <td>{_format_amount(item.review_cost_cny)}</td>
+          <td>{_format_amount(item.operating_expense_cny)}</td>
+          <td>{_format_amount(item.net_profit_cny)}</td>
+          <td>{'完整' if item.completeness == 'complete' else '待补数据'}</td>
+        </tr>
+        """
+        for item in statements
+    )
+    fields = (
+        "revenue_cny", "purchase_cash_cny", "cogs_cny", "platform_fee_cny",
+        "ad_recharge_paid_cny", "ad_recharge_credited_cny", "ad_spend_cny",
+        "review_cost_cny", "operating_expense_cny",
+    )
+    totals = [sum((getattr(item, field) or Decimal(0) for item in statements), Decimal(0)) for field in fields]
+    annual_profit = (
+        None if any(item.net_profit_cny is None for item in statements)
+        else sum((item.net_profit_cny for item in statements if item.net_profit_cny is not None), Decimal(0))
+    )
+    total_cells = "".join(f"<td>{_format_amount(value)}</td>" for value in totals)
+    body = f"""
+    <div class="module-hero"><h1>月度经营账</h1>
+      <p>利润与现金分开核算；广告充值不计入利润，只计入现金变化。</p></div>
+    <form method="get"><label>年份 <input name="year" value="{year}"></label><button>查看</button></form>
+    <section class="panel"><div class="table-wrap"><table>
+      <thead><tr><th>月份</th><th>收入</th><th>采购现金支出</th><th>销售成本</th>
+      <th>平台费</th><th>广告充值支付</th><th>广告充值到账</th><th>广告实际消耗</th>
+      <th>刷单</th><th>经营费用</th><th>净利润</th><th>完整性</th></tr></thead>
+      <tbody>{rows}<tr><th>年度合计</th>{total_cells}<td>{_format_amount(annual_profit)}</td><td>—</td></tr></tbody>
+    </table></div></section>
+    """
+    return _page_shell(
+        title="月度经营账", active_path="/operating-statement",
+        header_meta=f"{year} 年 · Excel 公式等价经营口径", body_content=body,
+    )
 
 PROFIT_INPUT_LABELS = {
     "gmv": "广告归因销售额",

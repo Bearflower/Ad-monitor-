@@ -7,6 +7,7 @@ from adwatch.dashboard.views import (
     render_ad_funds_page,
     render_inventory_page,
     render_navigation,
+    render_operating_statement_page,
     render_operations_forms,
     render_operations_page,
     render_optimization_center,
@@ -31,6 +32,7 @@ def test_unified_navigation_and_forms_cover_core_business_modules():
 
     for label in (
         "今日经营",
+        "月度经营账",
         "广告调优",
         "收入与广告资金",
         "SKU与库存",
@@ -45,6 +47,18 @@ def test_unified_navigation_and_forms_cover_core_business_modules():
     assert 'action="/fulfillment"' in forms
     assert "货盘代发" in forms and "自有备货" in forms
     assert "记账对账" in render_operations_page("csrf")
+
+
+def test_operating_statement_page_renders_twelve_months(tmp_path):
+    database = Database(tmp_path / "statement-page.sqlite3")
+    database.migrate()
+    page = render_operating_statement_page(database, year=2026)
+    assert "月度经营账" in page
+    assert page.count('data-month="2026-') == 12
+    assert "采购现金支出" in page
+    assert "广告实际消耗" in page
+    assert "广告充值不计入利润" in page
+    assert "年度合计" in page
 
 
 def test_optimization_center_explains_roas_evidence_and_execution_state():
