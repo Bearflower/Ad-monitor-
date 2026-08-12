@@ -23,7 +23,7 @@ def test_migration_40_adds_formula_parity_columns_and_monthly_rates(tmp_path):
         review = _columns(connection, "review_order_costs")
         receipts = _columns(connection, "purchase_receipts")
         lines = _columns(connection, "purchase_lines")
-    assert latest == 41
+    assert latest == 42
     assert "monthly_exchange_rate_overrides" in tables
     assert {
         "credited_amount_original",
@@ -81,7 +81,7 @@ def test_migration_41_creates_manual_income_entries(tmp_path):
             "SELECT MAX(version) FROM schema_migrations"
         ).fetchone()[0]
         columns = _columns(connection, "manual_income_entries")
-    assert latest == 41
+    assert latest == 42
     assert {
         "platform",
         "store",

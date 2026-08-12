@@ -1667,8 +1667,13 @@ def _render_inventory_write_forms(
           <div class="form-field"><label>供应商</label><input name="supplier" required></div>
           <div class="form-field"><label>入库日期</label><input type="date" name="received_on" value="{selected_date}" required></div>
           <div class="form-field"><label>Seller SKU</label><input name="seller_sku" required></div>
+          <div class="form-field"><label>产品名称</label><input name="product_name"></div>
           <div class="form-field"><label>入库数量</label><input name="quantity" inputmode="numeric" required></div>
-          <div class="form-field"><label>单位成本 (CNY)</label><input name="unit_cost_cny" inputmode="decimal" required></div>
+          <div class="form-field"><label>原币单位价</label><input name="unit_cost_original" inputmode="decimal" required></div>
+          <div class="form-field"><label>币种</label><select name="currency"><option>CNY</option><option>THB</option><option>SGD</option></select></div>
+          <div class="form-field"><label>物流单号</label><input name="tracking_number"></div>
+          <div class="form-field"><label>到货状态</label><select name="arrival_status"><option value="received">已入库</option><option value="in_transit">运输中</option><option value="pending">待发货</option></select></div>
+          <div class="form-field"><label>备注</label><input name="note"></div>
         </div>
         <div class="form-actions"><button type="submit" class="btn btn-success">采购入库</button></div>
       </form>
@@ -1819,6 +1824,7 @@ def render_inventory_page(
     platform_sku_count = service.platform_sku_count()
     latest_platform_inventory = service.latest_platform_inventory()
     receipts = service.list_purchase_receipts()
+    shipments = service.list_order_shipments()
     all_movements = service.list_inventory_movements()
     balances = service.list_inventory_balances()
 
@@ -1878,6 +1884,26 @@ def render_inventory_page(
         )
     else:
         receipt_rows = '<tr><td colspan="7" class="empty-state">暂无采购入库记录</td></tr>'
+
+    if shipments:
+        shipment_rows = "".join(
+            f"""
+            <tr>
+              <td>{html.escape(str(item['order_date']))}</td>
+              <td>{html.escape(str(item['order_id']))}</td>
+              <td>{html.escape(str(item['product_name']))}</td>
+              <td>{html.escape(str(item['seller_sku']))}</td>
+              <td class="number">{item['quantity']}</td>
+              <td class="number">{_format_amount(item['unit_cost_cny'])}</td>
+              <td class="number">{_format_amount(item['total_cost_cny'])}</td>
+              <td>{html.escape(str(item['tracking_number']))}</td>
+              <td>{html.escape(str(item['logistics_status']))}</td>
+            </tr>
+            """
+            for item in shipments
+        )
+    else:
+        shipment_rows = '<tr><td colspan="9" class="empty-state">暂无订单出库记录</td></tr>'
 
     # 渲染库存流水表格行
     if movements:
@@ -2099,6 +2125,20 @@ def render_inventory_page(
             </tr>
           </thead>
           <tbody>{movement_rows}</tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-header">
+        <h2>订单出库明细</h2>
+        <span class="panel-desc">订单成本快照与平台物流状态</span>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>日期</th><th>订单</th><th>产品</th><th>SKU</th>
+          <th>数量</th><th>单位成本</th><th>总成本</th><th>物流单号</th><th>发货状态</th></tr></thead>
+          <tbody>{shipment_rows}</tbody>
         </table>
       </div>
     </section>

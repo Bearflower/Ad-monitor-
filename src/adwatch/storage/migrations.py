@@ -2186,4 +2186,11 @@ MIGRATIONS = [
         ON manual_income_entries(occurred_on, status);
         """,
     ),
+    (
+        42,
+        """
+        ALTER TABLE platform_logistics_observations
+        ADD COLUMN tracking_number TEXT NOT NULL DEFAULT '';
+        """,
+    ),
 ]

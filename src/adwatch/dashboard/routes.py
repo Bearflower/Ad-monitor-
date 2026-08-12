@@ -113,18 +113,40 @@ class DashboardRouter:
                 )
                 return RouteResponse(303, location="/inventory")
             if path == "/purchases" and self.inventory:
+                received_on = date.fromisoformat(form["received_on"])
+                currency = form.get("currency", "CNY")
+                rate_form = dict(form)
+                rate_form["currency"] = currency
+                if "unit_cost_original" in form or "currency" in form:
+                    rate, rate_date, rate_source = self._accounting_rate(
+                        rate_form, received_on
+                    )
+                    unit_cost = Decimal(form["unit_cost_original"])
+                else:
+                    rate, rate_date, rate_source = (
+                        Decimal(1), received_on, "legacy"
+                    )
+                    unit_cost = Decimal(form["unit_cost_cny"])
                 self.inventory.receive_purchase(
                     receipt_id=form["receipt_id"],
                     supplier=form["supplier"],
-                    received_on=date.fromisoformat(form["received_on"]),
+                    received_on=received_on,
                     lines=(
                         PurchaseLine(
                             form["seller_sku"],
                             int(form["quantity"]),
-                            Decimal(form["unit_cost_cny"]),
+                            unit_cost,
+                            form.get("product_name", ""),
                         ),
                     ),
                     actor="local-web",
+                    currency=currency,
+                    rate_to_cny=rate,
+                    rate_date=rate_date,
+                    rate_source=rate_source,
+                    tracking_number=form.get("tracking_number", ""),
+                    arrival_status=form.get("arrival_status", "received"),
+                    note=form.get("note", ""),
                 )
                 return RouteResponse(303, location="/inventory")
             if path == "/inventory/adjust" and self.inventory:

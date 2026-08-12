@@ -64,6 +64,96 @@ def test_purchase_sale_return_and_damage_preserve_inventory_equation(inventory):
     ) is False
 
 
+def test_purchase_converts_original_unit_cost_and_preserves_logistics(inventory):
+    service, database = inventory
+    service.receive_purchase(
+        receipt_id="PO-THB-1",
+        supplier="factory",
+        received_on=date(2026, 8, 5),
+        currency="THB",
+        rate_to_cny=Decimal("0.20"),
+        rate_date=date(2026, 8, 1),
+        rate_source="monthly_override",
+        tracking_number="TRACK-1",
+        arrival_status="in_transit",
+        note="首批",
+        lines=(PurchaseLine("SKU-1", 3, Decimal(50), "泡脚包"),),
+        actor="yl",
+    )
+    with database.connect() as connection:
+        receipt = connection.execute(
+            "SELECT currency, rate_to_cny, tracking_number, arrival_status "
+            "FROM purchase_receipts"
+        ).fetchone()
+        line = connection.execute(
+            "SELECT unit_cost_original, line_cost_original, "
+            "unit_cost_cny, line_cost_cny FROM purchase_lines"
+        ).fetchone()
+    assert tuple(receipt) == ("THB", "0.20", "TRACK-1", "in_transit")
+    assert tuple(line) == ("50", "150", "10.00", "30.00")
+    assert service.balance("SKU-1") == 3
+
+
+def test_list_order_shipments_joins_order_cost_and_logistics(inventory):
+    service, database = inventory
+    with database.transaction() as connection:
+        connection.execute(
+            """
+            INSERT INTO platform_order_lines(
+                platform, store, order_id, item_id, model_id, seller_sku,
+                variation_name, product_name, quantity, buyer_paid,
+                currency, order_status, logistics_status, refund_status,
+                ordered_at, source_updated_at
+            ) VALUES (
+                'shopee', 'shop', 'O-1', 'I-1', 'M-1', 'SKU-1', '',
+                '泡脚包', 2, '100', 'THB', 'completed', 'shipped', '',
+                '2026-08-05', '2026-08-05T00:00:00+00:00'
+            )
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO order_cost_snapshots(
+                platform, store, order_id, seller_sku, quantity,
+                unit_cost_cny, total_cost_cny, cost_effective_date,
+                status, created_at
+            ) VALUES (
+                'shopee', 'shop', 'O-1', 'SKU-1', 2,
+                '10', '20', '2026-08-05', 'confirmed',
+                '2026-08-05T00:00:00+00:00'
+            )
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO platform_logistics_observations(
+                platform, store, order_id, observed_on, order_date,
+                logistics_status, source_updated_at, observed_at, source,
+                tracking_number
+            ) VALUES (
+                'shopee', 'shop', 'O-1', '2026-08-06', '2026-08-05',
+                'delivered', '2026-08-06T00:00:00+00:00',
+                '2026-08-06T00:00:00+00:00', 'ziniao', 'TRACK-O-1'
+            )
+            """
+        )
+    assert service.list_order_shipments() == (
+        {
+            "order_date": "2026-08-05",
+            "platform": "shopee",
+            "store": "shop",
+            "order_id": "O-1",
+            "product_name": "泡脚包",
+            "seller_sku": "SKU-1",
+            "quantity": 2,
+            "unit_cost_cny": Decimal(10),
+            "total_cost_cny": Decimal(20),
+            "tracking_number": "TRACK-O-1",
+            "logistics_status": "delivered",
+        },
+    )
+
+
 def test_platform_inventory_read_model_is_separate_from_manual_ledger(tmp_path):
     database = Database(tmp_path / "platform-inventory.sqlite3")
     database.migrate()

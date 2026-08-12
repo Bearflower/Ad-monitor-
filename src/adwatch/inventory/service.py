@@ -5,6 +5,7 @@ import uuid
 from datetime import UTC, date, datetime
 from decimal import Decimal
 
+from adwatch.accounting.money import convert_to_cny, normalize_currency
 from adwatch.inventory.models import PurchaseLine
 from adwatch.storage.db import Database
 from adwatch.storage.store_aliases import equivalent_store_names
@@ -26,13 +27,22 @@ class InventoryService:
         received_on: date,
         lines: tuple[PurchaseLine, ...],
         actor: str,
+        currency: str = "CNY",
+        rate_to_cny: Decimal = Decimal(1),
+        rate_date: date | None = None,
+        rate_source: str = "legacy",
+        tracking_number: str = "",
+        arrival_status: str = "received",
+        note: str = "",
     ) -> bool:
         supplier = self._required(supplier, "supplier")
         actor = self._required(actor, "actor")
         if not lines or any(
-            line.quantity <= 0 or line.unit_cost_cny <= 0 for line in lines
+            line.quantity <= 0 or line.unit_cost_original <= 0 for line in lines
         ):
             raise InventoryError("purchase lines must be positive")
+        normalized_currency = normalize_currency(currency)
+        rate_date = rate_date or received_on
         now = datetime.now(UTC).isoformat()
         with self.database.transaction() as connection:
             if connection.execute(
@@ -42,25 +52,39 @@ class InventoryService:
             connection.execute(
                 """
                 INSERT INTO purchase_receipts(
-                    id, supplier, received_on, status, created_by, created_at
-                ) VALUES (?, ?, ?, 'confirmed', ?, ?)
+                    id, supplier, received_on, status, created_by, created_at,
+                    currency, rate_to_cny, rate_date, rate_source,
+                    tracking_number, arrival_status, note
+                ) VALUES (?, ?, ?, 'confirmed', ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                (receipt_id, supplier, received_on.isoformat(), actor, now),
+                (
+                    receipt_id, supplier, received_on.isoformat(), actor, now,
+                    normalized_currency, str(rate_to_cny),
+                    rate_date.isoformat(), rate_source, tracking_number,
+                    arrival_status, note,
+                ),
             )
             for line in lines:
+                unit_cny = convert_to_cny(line.unit_cost_original, rate_to_cny)
+                original_total = line.unit_cost_original * line.quantity
+                line_cny = convert_to_cny(original_total, rate_to_cny)
                 connection.execute(
                     """
                     INSERT INTO purchase_lines(
                         receipt_id, seller_sku, quantity,
-                        unit_cost_cny, line_cost_cny
-                    ) VALUES (?, ?, ?, ?, ?)
+                        unit_cost_cny, line_cost_cny, product_name,
+                        unit_cost_original, line_cost_original
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         receipt_id,
                         line.seller_sku,
                         line.quantity,
-                        str(line.unit_cost_cny),
-                        str(line.unit_cost_cny * line.quantity),
+                        str(unit_cny),
+                        str(line_cny),
+                        line.product_name.strip(),
+                        str(line.unit_cost_original),
+                        str(original_total),
                     ),
                 )
                 self._move(
@@ -87,6 +111,68 @@ class InventoryService:
                 now,
             )
         return True
+
+    def list_order_shipments(self) -> tuple[dict, ...]:
+        with self.database.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT substr(line.ordered_at, 1, 10) AS order_date,
+                       line.platform, line.store, line.order_id,
+                       line.product_name, line.sku_identity AS seller_sku,
+                       snapshot.quantity, snapshot.unit_cost_cny,
+                       snapshot.total_cost_cny,
+                       COALESCE(logistics.tracking_number, '')
+                           AS tracking_number,
+                       COALESCE(logistics.logistics_status,
+                                line.logistics_status) AS logistics_status
+                FROM effective_order_sku_lines AS line
+                JOIN order_cost_snapshots AS snapshot
+                  ON snapshot.platform=line.platform
+                 AND snapshot.order_id=line.order_id
+                 AND snapshot.seller_sku=line.sku_identity
+                 AND snapshot.status IN ('confirmed', 'returned')
+                 AND (
+                    snapshot.store=line.store OR EXISTS (
+                        SELECT 1 FROM store_aliases AS alias
+                        WHERE alias.platform=line.platform AND (
+                            (alias.source_store=line.store AND
+                             alias.canonical_store=snapshot.store) OR
+                            (alias.canonical_store=line.store AND
+                             alias.source_store=snapshot.store)
+                        )
+                    )
+                 )
+                LEFT JOIN platform_logistics_observations AS logistics
+                  ON logistics.platform=line.platform
+                 AND logistics.store=line.store
+                 AND logistics.order_id=line.order_id
+                 AND logistics.observed_on=(
+                    SELECT MAX(latest.observed_on)
+                    FROM platform_logistics_observations AS latest
+                    WHERE latest.platform=line.platform
+                      AND latest.store=line.store
+                      AND latest.order_id=line.order_id
+                 )
+                WHERE line.resolution_status='ready'
+                ORDER BY line.ordered_at DESC, line.order_id, line.sku_identity
+                """
+            ).fetchall()
+        return tuple(
+            {
+                "order_date": row["order_date"],
+                "platform": row["platform"],
+                "store": row["store"],
+                "order_id": row["order_id"],
+                "product_name": row["product_name"],
+                "seller_sku": row["seller_sku"],
+                "quantity": int(row["quantity"]),
+                "unit_cost_cny": Decimal(row["unit_cost_cny"]),
+                "total_cost_cny": Decimal(row["total_cost_cny"]),
+                "tracking_number": row["tracking_number"],
+                "logistics_status": row["logistics_status"],
+            }
+            for row in rows
+        )
 
     def ship_order(
         self,
@@ -1010,6 +1096,11 @@ class InventoryService:
                 pr.supplier,
                 pr.received_on,
                 pr.status,
+                pr.currency,
+                pr.rate_to_cny,
+                pr.tracking_number,
+                pr.arrival_status,
+                pr.note,
                 pr.created_by,
                 pr.reversal_reason,
                 COUNT(pl.seller_sku) AS line_count,
@@ -1046,6 +1137,11 @@ class InventoryService:
                 "supplier": row["supplier"],
                 "received_on": row["received_on"],
                 "status": row["status"],
+                "currency": row["currency"],
+                "rate_to_cny": row["rate_to_cny"],
+                "tracking_number": row["tracking_number"],
+                "arrival_status": row["arrival_status"],
+                "note": row["note"],
                 "created_by": row["created_by"],
                 "reversal_reason": row["reversal_reason"],
                 "line_count": row["line_count"],
