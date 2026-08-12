@@ -2,6 +2,8 @@ from datetime import date
 from decimal import Decimal
 
 from adwatch.accounting.operating_statement import OperatingStatementService
+from adwatch.income.models import FeeStatement
+from adwatch.income.repository import FeeStatementRepository
 from adwatch.storage.db import Database
 
 
@@ -20,6 +22,10 @@ def test_monthly_statement_separates_cash_from_profit(tmp_path):
               'i','','','','2026-08-05','50','CNY','1','50',
               '2026-08-05','identity','confirmed','','test','2026-08-05',NULL)
             """
+        )
+        connection.execute(
+            "INSERT INTO exchange_rates(currency,rate_date,rate_to_cny) "
+            "VALUES('THB','2026-08-05','0.2')"
         )
         connection.execute(
             """
@@ -77,12 +83,28 @@ def test_monthly_statement_separates_cash_from_profit(tmp_path):
               'confirmed','2026-08-05')
             """
         )
+    FeeStatementRepository(database).save(
+        FeeStatement(
+            platform="shopee", store="shop", source_store="shop",
+            period_start=date(2026, 8, 1), period_end=date(2026, 8, 5),
+            currency="THB", product_price=Decimal(1000),
+            commission_fee=Decimal(80), service_fee=Decimal(0),
+            transaction_fee=Decimal(0), affiliate_fee=Decimal(0),
+            sales_fee_total=Decimal(80), effective_rate=Decimal("0.080000"),
+            seller_voucher=Decimal(0), shipping_paid_by_buyer=Decimal(0),
+            shipping_provider_charge=Decimal(0), shipping_rebate=Decimal(0),
+            ads_credit_topup=Decimal(0), adjustment_amount=Decimal(0),
+            total_payout=Decimal(920), source_name="income.pdf",
+            source_sha256="a" * 64,
+        )
+    )
     statement = OperatingStatementService(database).monthly(2026, 8)
     assert statement.revenue_cny == Decimal("1050.00")
     assert statement.purchase_cash_cny == Decimal("300.00")
     assert statement.cogs_cny == Decimal("250.00")
+    assert statement.platform_fee_cny == Decimal("16.00")
     assert statement.ad_spend_cny == Decimal("100.00")
-    assert statement.net_profit_cny == Decimal("630.00")
+    assert statement.net_profit_cny == Decimal("614.00")
 
 
 def test_yearly_returns_twelve_fixed_months(tmp_path):
@@ -92,3 +114,26 @@ def test_yearly_returns_twelve_fixed_months(tmp_path):
     assert len(statements) == 12
     assert statements[0].starts_on == date(2026, 1, 1)
     assert statements[-1].ends_on == date(2026, 12, 31)
+
+
+def test_foreign_platform_fee_without_rate_blocks_profit(tmp_path):
+    database = Database(tmp_path / "missing-rate.sqlite3")
+    database.migrate()
+    FeeStatementRepository(database).save(
+        FeeStatement(
+            platform="shopee", store="shop", source_store="shop",
+            period_start=date(2026, 8, 1), period_end=date(2026, 8, 5),
+            currency="THB", product_price=Decimal(100),
+            commission_fee=Decimal(10), service_fee=Decimal(0),
+            transaction_fee=Decimal(0), affiliate_fee=Decimal(0),
+            sales_fee_total=Decimal(10), effective_rate=Decimal("0.100000"),
+            seller_voucher=Decimal(0), shipping_paid_by_buyer=Decimal(0),
+            shipping_provider_charge=Decimal(0), shipping_rebate=Decimal(0),
+            ads_credit_topup=Decimal(0), adjustment_amount=Decimal(0),
+            total_payout=Decimal(90), source_name="missing-rate.pdf",
+            source_sha256="b" * 64,
+        )
+    )
+    statement = OperatingStatementService(database).monthly(2026, 8)
+    assert statement.net_profit_cny is None
+    assert "exchange_rate" in statement.missing_inputs

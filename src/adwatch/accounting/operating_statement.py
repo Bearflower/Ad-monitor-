@@ -5,6 +5,10 @@ from dataclasses import dataclass
 from datetime import date
 from decimal import ROUND_HALF_UP, Decimal
 
+from adwatch.accounting.exchange_rates import (
+    AccountingExchangeRateService,
+    ExchangeRateInputError,
+)
 from adwatch.storage.db import Database
 
 
@@ -91,19 +95,14 @@ class OperatingStatementService:
                 (start, end),
             ).fetchone()
             cogs, cogs_count = self._cogs(connection, start, end)
-            platform_fee, fee_count = connection.execute(
+            fee_rows = connection.execute(
                 """
-                SELECT COALESCE(SUM(CASE WHEN entry.currency='CNY'
-                    THEN CAST(entry.amount_original AS REAL) ELSE 0 END), 0),
-                       COUNT(*)
-                FROM platform_fee_entries AS entry
-                JOIN platform_fee_statements AS statement
-                  ON statement.id=entry.statement_id
-                WHERE statement.is_current=1
-                  AND statement.period_end>=? AND statement.period_start<=?
+                SELECT currency, sales_fee_total, period_end
+                FROM platform_fee_statements
+                WHERE is_current=1 AND period_end>=? AND period_start<=?
                 """,
                 (start, end),
-            ).fetchone()
+            ).fetchall()
             ad_spend, ad_spend_count = self._sum_count(
                 connection, "ad_spend_entries", "amount_cny", "occurred_on",
                 start, end
@@ -145,7 +144,7 @@ class OperatingStatementService:
                 connection, "profit_payments", "amount_cny", "paid_on",
                 start, end, "status IN ('paid', 'reversed')"
             )
-            missing = tuple(
+            missing = {
                 row[0]
                 for row in connection.execute(
                     """
@@ -156,7 +155,20 @@ class OperatingStatementService:
                     """,
                     (start, end),
                 )
-            )
+            }
+
+        platform_fee = Decimal(0)
+        rates = AccountingExchangeRateService(self.database)
+        for row in fee_rows:
+            try:
+                rate = rates.resolve(
+                    row["currency"], date.fromisoformat(row["period_end"])
+                ).rate
+            except ExchangeRateInputError:
+                missing.add("exchange_rate")
+                continue
+            platform_fee += Decimal(row["sales_fee_total"]) * rate
+        fee_count = len(fee_rows)
 
         revenue = (
             _money(settlement)
@@ -165,7 +177,10 @@ class OperatingStatementService:
         )
         costs = (_money(cogs) + _money(platform_fee) + _money(ad_spend)
                  + _money(expense) + _money(review))
-        pending_profit = bool(set(missing) & {"product_cost", "refunds"})
+        missing_inputs = tuple(sorted(missing))
+        pending_profit = bool(
+            missing & {"product_cost", "refunds", "exchange_rate"}
+        )
         net_profit = None if pending_profit else _money(revenue - costs)
         cash_change = _money(
             revenue - _money(purchase) - _money(funding[0])
@@ -193,7 +208,9 @@ class OperatingStatementService:
             _money(funding[0]), _money(funding[1]), _money(ad_spend),
             _money(review), _money(expense), net_profit, _money(capital),
             _money(withdrawal), cash_change,
-            "pending_data" if pending_profit else "complete", missing, counts,
+            "pending_data" if pending_profit else "complete",
+            missing_inputs,
+            counts,
         )
 
     @staticmethod
