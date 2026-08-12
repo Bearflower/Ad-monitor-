@@ -2082,4 +2082,79 @@ MIGRATIONS = [
          AND scope.seller_sku=line.raw_seller_sku;
         """,
     ),
+    (
+        40,
+        """
+        CREATE TABLE monthly_exchange_rate_overrides (
+            currency TEXT NOT NULL,
+            year_month TEXT NOT NULL CHECK(length(year_month)=7),
+            rate_to_cny TEXT NOT NULL,
+            source TEXT NOT NULL,
+            note TEXT NOT NULL DEFAULT '',
+            created_by TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            PRIMARY KEY(currency, year_month)
+        );
+
+        ALTER TABLE ad_funding_entries
+        ADD COLUMN credited_amount_original TEXT;
+        ALTER TABLE ad_funding_entries
+        ADD COLUMN credited_amount_cny TEXT;
+        ALTER TABLE ad_funding_entries ADD COLUMN rate_date TEXT;
+        ALTER TABLE ad_funding_entries
+        ADD COLUMN rate_source TEXT NOT NULL DEFAULT 'legacy';
+        UPDATE ad_funding_entries
+        SET credited_amount_original=amount_original,
+            credited_amount_cny=amount_cny,
+            rate_date=occurred_on;
+
+        ALTER TABLE capital_entries
+        ADD COLUMN entry_name TEXT NOT NULL DEFAULT '';
+        ALTER TABLE capital_entries ADD COLUMN rate_date TEXT;
+        ALTER TABLE capital_entries
+        ADD COLUMN rate_source TEXT NOT NULL DEFAULT 'legacy';
+        ALTER TABLE capital_entries
+        ADD COLUMN note TEXT NOT NULL DEFAULT '';
+        UPDATE capital_entries SET rate_date=occurred_on;
+
+        ALTER TABLE review_order_costs
+        ADD COLUMN goods_cost_original TEXT;
+        ALTER TABLE review_order_costs
+        ADD COLUMN service_fee_original TEXT;
+        ALTER TABLE review_order_costs
+        ADD COLUMN currency TEXT NOT NULL DEFAULT 'CNY';
+        ALTER TABLE review_order_costs
+        ADD COLUMN rate_to_cny TEXT NOT NULL DEFAULT '1';
+        ALTER TABLE review_order_costs ADD COLUMN rate_date TEXT;
+        ALTER TABLE review_order_costs
+        ADD COLUMN rate_source TEXT NOT NULL DEFAULT 'legacy';
+        UPDATE review_order_costs
+        SET goods_cost_original=goods_cost_cny,
+            service_fee_original=service_fee_cny,
+            rate_date=occurred_on;
+
+        ALTER TABLE purchase_receipts
+        ADD COLUMN currency TEXT NOT NULL DEFAULT 'CNY';
+        ALTER TABLE purchase_receipts
+        ADD COLUMN rate_to_cny TEXT NOT NULL DEFAULT '1';
+        ALTER TABLE purchase_receipts ADD COLUMN rate_date TEXT;
+        ALTER TABLE purchase_receipts
+        ADD COLUMN rate_source TEXT NOT NULL DEFAULT 'legacy';
+        ALTER TABLE purchase_receipts
+        ADD COLUMN tracking_number TEXT NOT NULL DEFAULT '';
+        ALTER TABLE purchase_receipts
+        ADD COLUMN arrival_status TEXT NOT NULL DEFAULT 'received';
+        ALTER TABLE purchase_receipts
+        ADD COLUMN note TEXT NOT NULL DEFAULT '';
+        UPDATE purchase_receipts SET rate_date=received_on;
+
+        ALTER TABLE purchase_lines
+        ADD COLUMN product_name TEXT NOT NULL DEFAULT '';
+        ALTER TABLE purchase_lines ADD COLUMN unit_cost_original TEXT;
+        ALTER TABLE purchase_lines ADD COLUMN line_cost_original TEXT;
+        UPDATE purchase_lines
+        SET unit_cost_original=unit_cost_cny,
+            line_cost_original=line_cost_cny;
+        """,
+    ),
 ]

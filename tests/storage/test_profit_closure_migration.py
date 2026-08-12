@@ -21,7 +21,7 @@ def test_migration_29_creates_fulfillment_defaults_and_refund_inputs(tmp_path):
         ).fetchone()[0]
 
     assert {"store_fulfillment_history", "daily_refund_inputs"} <= tables
-    assert version == 39
+    assert version == 40
 
 
 def test_daily_refund_input_rejects_negative_amount(tmp_path):
