@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import UTC, datetime
 from decimal import Decimal
 
 from openpyxl import Workbook
@@ -54,7 +54,7 @@ def test_parse_order_export_aggregates_duplicate_sku_lines(tmp_path):
     result = parse_order_export(
         source,
         store="no4kud44da",
-        source_updated_at=datetime(2026, 7, 30, 9, 0),
+        source_updated_at=datetime(2026, 7, 30, 9, 0, tzinfo=UTC),
     )
 
     assert result.rejected == ()
@@ -119,7 +119,7 @@ def test_parse_order_export_maps_cancelled_and_completed_statuses(tmp_path):
     result = parse_order_export(
         source,
         store="no4kud44da",
-        source_updated_at=datetime(2026, 7, 30, 9, 0),
+        source_updated_at=datetime(2026, 7, 30, 9, 0, tzinfo=UTC),
     )
 
     statuses = {order.order_id: order.order_status for order in result.orders}

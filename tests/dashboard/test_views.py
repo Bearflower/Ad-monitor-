@@ -146,6 +146,7 @@ def test_inventory_page_shows_missing_cost_and_in_page_write_forms(tmp_path):
     assert 'value="2026-08-01"' in page
     assert 'class="missing-cost-list"' in page
     assert page.count('class="missing-cost-item"') == 1
+    assert 'class="order-cost-gap-item"' not in page
     assert '<summary class="missing-cost-summary">' in page
     assert 'class="missing-cost-editor"' in page
     assert 'class="missing-cost-table"' not in page

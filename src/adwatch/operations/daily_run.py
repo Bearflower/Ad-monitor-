@@ -338,16 +338,27 @@ class ProductionDailyRunDependencies:
     def update_knowledge(self, mode: str) -> None:
         if mode != "ziniao":
             return
+        sources = tuple(
+            source
+            for source in DEFAULT_SOURCES
+            if self.settings.tiktok_collection_enabled
+            or source.key != "tiktok_shop_th_help"
+        )
+        store_ids = (
+            {
+                "tiktok_shop_th_help": (
+                    self.settings.ziniao_tiktok_store_id
+                ),
+            }
+            if self.settings.tiktok_collection_enabled
+            else {}
+        )
         KnowledgeService(
             KnowledgeRepository(self.database),
             ZiniaoCliClient(),
             store_id=self.settings.ziniao_shopee_store_id,
-            store_ids={
-                "tiktok_shop_th_help": (
-                    self.settings.ziniao_tiktok_store_id
-                ),
-            },
-            sources=DEFAULT_SOURCES,
+            store_ids=store_ids,
+            sources=sources,
             request_delay_ms=self.settings.knowledge_request_delay_ms,
             max_pages=self.settings.knowledge_max_pages_per_run,
         ).update()

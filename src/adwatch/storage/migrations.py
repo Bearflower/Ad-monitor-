@@ -1578,4 +1578,508 @@ MIGRATIONS = [
         ADD COLUMN order_rejected_count INTEGER NOT NULL DEFAULT 0;
         """,
     ),
+    (
+        34,
+        """
+        DROP VIEW effective_platform_order_lines;
+
+        CREATE VIEW effective_platform_order_lines AS
+        WITH canonicalized AS (
+            SELECT
+                line.*,
+                COALESCE(alias.canonical_store, line.store)
+                    AS canonical_store,
+                CASE
+                    WHEN line.item_id=line.seller_sku
+                     AND line.model_id=line.seller_sku
+                    THEN 1 ELSE 0
+                END AS is_placeholder
+            FROM platform_order_lines AS line
+            LEFT JOIN store_aliases AS alias
+              ON alias.platform=line.platform
+             AND alias.source_store=line.store
+        ),
+        candidates AS (
+            SELECT
+                canonicalized.*,
+                MAX(CASE WHEN is_placeholder=0 THEN 1 ELSE 0 END)
+                    OVER (
+                        PARTITION BY platform, canonical_store,
+                                     order_id, seller_sku
+                    ) AS has_resolved
+            FROM canonicalized
+        ),
+        ranked AS (
+            SELECT
+                candidates.*,
+                ROW_NUMBER() OVER (
+                    PARTITION BY platform, canonical_store, order_id,
+                                 seller_sku, item_id, model_id
+                    ORDER BY
+                        CASE WHEN store=canonical_store THEN 0 ELSE 1 END,
+                        source_updated_at DESC,
+                        store
+                ) AS source_rank
+            FROM candidates
+            WHERE NOT (is_placeholder=1 AND has_resolved=1)
+        )
+        SELECT ranked.*, 'ready' AS resolution_status
+        FROM ranked
+        WHERE source_rank=1;
+
+        CREATE VIEW effective_order_sku_lines AS
+        WITH seller_scope AS (
+            SELECT
+                sku.platform,
+                COALESCE(alias.canonical_store, sku.store)
+                    AS canonical_store,
+                sku.seller_sku,
+                COUNT(DISTINCT sku.item_id || char(31) || sku.model_id)
+                    AS identity_count
+            FROM platform_sku_mappings AS sku
+            LEFT JOIN store_aliases AS alias
+              ON alias.platform=sku.platform
+             AND alias.source_store=sku.store
+            GROUP BY
+                sku.platform,
+                COALESCE(alias.canonical_store, sku.store),
+                sku.seller_sku
+        )
+        SELECT
+            line.*,
+            CASE
+                WHEN scope.identity_count > 1
+                THEN line.seller_sku || ' [' || line.item_id || ':'
+                     || line.model_id || ']'
+                ELSE line.seller_sku
+            END AS sku_identity
+        FROM effective_platform_order_lines AS line
+        LEFT JOIN seller_scope AS scope
+          ON scope.platform=line.platform
+         AND scope.canonical_store=line.canonical_store
+         AND scope.seller_sku=line.seller_sku;
+        """,
+    ),
+    (
+        35,
+        """
+        DROP VIEW effective_order_sku_lines;
+
+        CREATE VIEW effective_order_sku_lines AS
+        WITH seller_scope AS (
+            SELECT
+                sku.platform,
+                COALESCE(alias.canonical_store, sku.store)
+                    AS canonical_store,
+                sku.seller_sku,
+                COUNT(DISTINCT sku.item_id || char(31) || sku.model_id)
+                    AS identity_count
+            FROM platform_sku_mappings AS sku
+            LEFT JOIN store_aliases AS alias
+              ON alias.platform=sku.platform
+             AND alias.source_store=sku.store
+            GROUP BY
+                sku.platform,
+                COALESCE(alias.canonical_store, sku.store),
+                sku.seller_sku
+        )
+        SELECT
+            line.*,
+            CASE
+                WHEN scope.identity_count > 1
+                THEN line.seller_sku || ' [' || line.item_id || ':'
+                     || line.model_id || ']'
+                ELSE line.seller_sku
+            END AS sku_identity
+        FROM effective_platform_order_lines AS line
+        LEFT JOIN seller_scope AS scope
+          ON scope.platform=line.platform
+         AND scope.canonical_store=line.canonical_store
+         AND scope.seller_sku=line.seller_sku;
+        """,
+    ),
+    (
+        36,
+        """
+        DROP VIEW effective_order_sku_lines;
+        DROP VIEW effective_platform_order_lines;
+
+        CREATE VIEW effective_platform_order_lines AS
+        WITH canonicalized AS (
+            SELECT
+                line.*,
+                COALESCE(alias.canonical_store, line.store)
+                    AS canonical_store,
+                CASE
+                    WHEN line.item_id=line.seller_sku
+                     AND line.model_id=line.seller_sku
+                    THEN 1 ELSE 0
+                END AS is_placeholder
+            FROM platform_order_lines AS line
+            LEFT JOIN store_aliases AS alias
+              ON alias.platform=line.platform
+             AND alias.source_store=line.store
+        ),
+        candidates AS (
+            SELECT
+                canonicalized.*,
+                MAX(CASE WHEN is_placeholder=0 THEN 1 ELSE 0 END)
+                    OVER (
+                        PARTITION BY platform, canonical_store,
+                                     order_id, seller_sku
+                    ) AS has_resolved
+                ,MAX(
+                    CASE
+                        WHEN store=canonical_store AND is_placeholder=0
+                        THEN 1 ELSE 0
+                    END
+                ) OVER (
+                    PARTITION BY platform, canonical_store,
+                                 order_id, seller_sku
+                ) AS has_canonical_resolved
+            FROM canonicalized
+        ),
+        filtered AS (
+            SELECT * FROM candidates
+            WHERE NOT (is_placeholder=1 AND has_resolved=1)
+              AND NOT (
+                  has_canonical_resolved=1 AND store<>canonical_store
+              )
+        ),
+        mapping_scope AS (
+            SELECT
+                sku.platform,
+                COALESCE(alias.canonical_store, sku.store)
+                    AS canonical_store,
+                sku.seller_sku,
+                COUNT(DISTINCT sku.item_id || char(31) || sku.model_id)
+                    AS identity_count
+            FROM platform_sku_mappings AS sku
+            LEFT JOIN store_aliases AS alias
+              ON alias.platform=sku.platform
+             AND alias.source_store=sku.store
+            GROUP BY
+                sku.platform,
+                COALESCE(alias.canonical_store, sku.store),
+                sku.seller_sku
+        ),
+        line_scope AS (
+            SELECT
+                platform, canonical_store, order_id, seller_sku,
+                COUNT(DISTINCT item_id || char(31) || model_id)
+                    AS line_identity_count
+            FROM filtered
+            GROUP BY platform, canonical_store, order_id, seller_sku
+        ),
+        ranked AS (
+            SELECT
+                filtered.*,
+                COALESCE(mapping_scope.identity_count, 0)
+                    AS mapped_identity_count,
+                line_scope.line_identity_count,
+                ROW_NUMBER() OVER (
+                    PARTITION BY
+                        filtered.platform, filtered.canonical_store,
+                        filtered.order_id, filtered.seller_sku,
+                        CASE
+                            WHEN COALESCE(
+                                mapping_scope.identity_count, 0
+                            ) > 1
+                            THEN filtered.item_id ELSE ''
+                        END,
+                        CASE
+                            WHEN COALESCE(
+                                mapping_scope.identity_count, 0
+                            ) > 1
+                            THEN filtered.model_id ELSE ''
+                        END
+                    ORDER BY
+                        CASE
+                            WHEN filtered.store=filtered.canonical_store
+                            THEN 0 ELSE 1
+                        END,
+                        filtered.source_updated_at DESC,
+                        filtered.item_id,
+                        filtered.model_id,
+                        filtered.store
+                ) AS source_rank
+            FROM filtered
+            JOIN line_scope
+              ON line_scope.platform=filtered.platform
+             AND line_scope.canonical_store=filtered.canonical_store
+             AND line_scope.order_id=filtered.order_id
+             AND line_scope.seller_sku=filtered.seller_sku
+            LEFT JOIN mapping_scope
+              ON mapping_scope.platform=filtered.platform
+             AND mapping_scope.canonical_store=filtered.canonical_store
+             AND mapping_scope.seller_sku=filtered.seller_sku
+        )
+        SELECT
+            ranked.*,
+            CASE
+                WHEN line_identity_count > 1
+                 AND mapped_identity_count <= 1
+                THEN 'ambiguous_resolved'
+                ELSE 'ready'
+            END AS resolution_status
+        FROM ranked
+        WHERE source_rank=1;
+
+        CREATE VIEW effective_order_sku_lines AS
+        WITH seller_scope AS (
+            SELECT
+                sku.platform,
+                COALESCE(alias.canonical_store, sku.store)
+                    AS canonical_store,
+                sku.seller_sku,
+                COUNT(DISTINCT sku.item_id || char(31) || sku.model_id)
+                    AS identity_count
+            FROM platform_sku_mappings AS sku
+            LEFT JOIN store_aliases AS alias
+              ON alias.platform=sku.platform
+             AND alias.source_store=sku.store
+            GROUP BY
+                sku.platform,
+                COALESCE(alias.canonical_store, sku.store),
+                sku.seller_sku
+        )
+        SELECT
+            line.*,
+            CASE
+                WHEN scope.identity_count > 1
+                THEN line.seller_sku || ' [' || line.item_id || ':'
+                     || line.model_id || ']'
+                ELSE line.seller_sku
+            END AS sku_identity
+        FROM effective_platform_order_lines AS line
+        LEFT JOIN seller_scope AS scope
+          ON scope.platform=line.platform
+         AND scope.canonical_store=line.canonical_store
+         AND scope.seller_sku=line.seller_sku;
+        """,
+    ),
+    (
+        37,
+        """
+        DROP VIEW effective_order_sku_lines;
+
+        CREATE VIEW effective_order_sku_lines AS
+        WITH seller_scope AS (
+            SELECT
+                sku.platform,
+                COALESCE(alias.canonical_store, sku.store)
+                    AS canonical_store,
+                sku.seller_sku,
+                COUNT(DISTINCT
+                    CASE
+                        WHEN TRIM(COALESCE(sku.product_name, '')) <> ''
+                          OR TRIM(COALESCE(sku.variation_name, '')) <> ''
+                        THEN LOWER(TRIM(COALESCE(sku.product_name, '')))
+                             || char(31) ||
+                             LOWER(TRIM(COALESCE(sku.variation_name, '')))
+                        ELSE sku.item_id || char(31) || sku.model_id
+                    END
+                ) AS identity_count
+            FROM platform_sku_mappings AS sku
+            LEFT JOIN store_aliases AS alias
+              ON alias.platform=sku.platform
+             AND alias.source_store=sku.store
+            GROUP BY
+                sku.platform,
+                COALESCE(alias.canonical_store, sku.store),
+                sku.seller_sku
+        )
+        SELECT
+            line.*,
+            CASE
+                WHEN scope.identity_count > 1
+                THEN line.seller_sku || ' [' || line.item_id || ':'
+                     || line.model_id || ']'
+                ELSE line.seller_sku
+            END AS sku_identity
+        FROM effective_platform_order_lines AS line
+        LEFT JOIN seller_scope AS scope
+          ON scope.platform=line.platform
+         AND scope.canonical_store=line.canonical_store
+         AND scope.seller_sku=line.seller_sku;
+        """,
+    ),
+    (
+        38,
+        """
+        DROP VIEW effective_order_sku_lines;
+
+        CREATE VIEW effective_order_sku_lines AS
+        WITH normalized AS (
+            SELECT
+                line.*,
+                COALESCE(
+                    (
+                        SELECT sku.seller_sku
+                        FROM platform_sku_mappings AS sku
+                        LEFT JOIN store_aliases AS sku_alias
+                          ON sku_alias.platform=sku.platform
+                         AND sku_alias.source_store=sku.store
+                        WHERE sku.platform=line.platform
+                          AND COALESCE(
+                              sku_alias.canonical_store, sku.store
+                          )=line.canonical_store
+                          AND sku.item_id=line.item_id
+                          AND sku.model_id=line.model_id
+                        ORDER BY
+                            CASE WHEN sku.store=line.canonical_store
+                                 THEN 0 ELSE 1 END,
+                            sku.observed_at DESC,
+                            sku.store
+                        LIMIT 1
+                    ),
+                    CASE
+                        WHEN line.seller_sku LIKE
+                             '% [' || line.item_id || ':' ||
+                             line.model_id || ']'
+                        THEN SUBSTR(
+                            line.seller_sku,
+                            1,
+                            LENGTH(line.seller_sku) - LENGTH(
+                                ' [' || line.item_id || ':' ||
+                                line.model_id || ']'
+                            )
+                        )
+                        ELSE line.seller_sku
+                    END
+                ) AS raw_seller_sku
+            FROM effective_platform_order_lines AS line
+        ),
+        seller_scope AS (
+            SELECT
+                sku.platform,
+                COALESCE(alias.canonical_store, sku.store)
+                    AS canonical_store,
+                sku.seller_sku,
+                COUNT(DISTINCT
+                    CASE
+                        WHEN TRIM(COALESCE(sku.product_name, '')) <> ''
+                          OR TRIM(COALESCE(sku.variation_name, '')) <> ''
+                        THEN LOWER(TRIM(COALESCE(sku.product_name, '')))
+                             || char(31) ||
+                             LOWER(TRIM(COALESCE(sku.variation_name, '')))
+                        ELSE sku.item_id || char(31) || sku.model_id
+                    END
+                ) AS identity_count
+            FROM platform_sku_mappings AS sku
+            LEFT JOIN store_aliases AS alias
+              ON alias.platform=sku.platform
+             AND alias.source_store=sku.store
+            GROUP BY
+                sku.platform,
+                COALESCE(alias.canonical_store, sku.store),
+                sku.seller_sku
+        )
+        SELECT
+            line.*,
+            CASE
+                WHEN scope.identity_count > 1
+                THEN line.raw_seller_sku || ' [' || line.item_id || ':'
+                     || line.model_id || ']'
+                ELSE line.raw_seller_sku
+            END AS sku_identity
+        FROM normalized AS line
+        LEFT JOIN seller_scope AS scope
+          ON scope.platform=line.platform
+         AND scope.canonical_store=line.canonical_store
+         AND scope.seller_sku=line.raw_seller_sku;
+        """,
+    ),
+    (
+        39,
+        """
+        DROP VIEW effective_order_sku_lines;
+
+        CREATE VIEW effective_order_sku_lines AS
+        WITH mapping_ranked AS (
+            SELECT
+                sku.*,
+                COALESCE(alias.canonical_store, sku.store)
+                    AS canonical_store,
+                ROW_NUMBER() OVER (
+                    PARTITION BY
+                        sku.platform,
+                        COALESCE(alias.canonical_store, sku.store),
+                        sku.item_id,
+                        sku.model_id
+                    ORDER BY sku.observed_at DESC, sku.store
+                ) AS mapping_rank
+            FROM platform_sku_mappings AS sku
+            LEFT JOIN store_aliases AS alias
+              ON alias.platform=sku.platform
+             AND alias.source_store=sku.store
+        ),
+        normalized AS (
+            SELECT
+                line.*,
+                COALESCE(
+                    mapping.seller_sku,
+                    CASE
+                        WHEN line.seller_sku LIKE
+                             '% [' || line.item_id || ':' ||
+                             line.model_id || ']'
+                        THEN SUBSTR(
+                            line.seller_sku,
+                            1,
+                            LENGTH(line.seller_sku) - LENGTH(
+                                ' [' || line.item_id || ':' ||
+                                line.model_id || ']'
+                            )
+                        )
+                        ELSE line.seller_sku
+                    END
+                ) AS raw_seller_sku
+            FROM effective_platform_order_lines AS line
+            LEFT JOIN mapping_ranked AS mapping
+              ON mapping.platform=line.platform
+             AND mapping.canonical_store=line.canonical_store
+             AND mapping.item_id=line.item_id
+             AND mapping.model_id=line.model_id
+             AND mapping.mapping_rank=1
+        ),
+        seller_scope AS (
+            SELECT
+                sku.platform,
+                COALESCE(alias.canonical_store, sku.store)
+                    AS canonical_store,
+                sku.seller_sku,
+                COUNT(DISTINCT
+                    CASE
+                        WHEN TRIM(COALESCE(sku.product_name, '')) <> ''
+                          OR TRIM(COALESCE(sku.variation_name, '')) <> ''
+                        THEN LOWER(TRIM(COALESCE(sku.product_name, '')))
+                             || char(31) ||
+                             LOWER(TRIM(COALESCE(sku.variation_name, '')))
+                        ELSE sku.item_id || char(31) || sku.model_id
+                    END
+                ) AS identity_count
+            FROM platform_sku_mappings AS sku
+            LEFT JOIN store_aliases AS alias
+              ON alias.platform=sku.platform
+             AND alias.source_store=sku.store
+            GROUP BY
+                sku.platform,
+                COALESCE(alias.canonical_store, sku.store),
+                sku.seller_sku
+        )
+        SELECT
+            line.*,
+            CASE
+                WHEN scope.identity_count > 1
+                THEN line.raw_seller_sku || ' [' || line.item_id || ':'
+                     || line.model_id || ']'
+                ELSE line.raw_seller_sku
+            END AS sku_identity
+        FROM normalized AS line
+        LEFT JOIN seller_scope AS scope
+          ON scope.platform=line.platform
+         AND scope.canonical_store=line.canonical_store
+         AND scope.seller_sku=line.raw_seller_sku;
+        """,
+    ),
 ]

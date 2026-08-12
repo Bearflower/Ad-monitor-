@@ -2,6 +2,7 @@ import argparse
 import csv
 import json
 import shutil
+import sys
 import uuid
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
@@ -56,6 +57,12 @@ from adwatch.knowledge.service import KnowledgeService
 from adwatch.knowledge.sources import DEFAULT_SOURCES
 from adwatch.operations.backup import create_backup, verify_backup
 from adwatch.operations.daily_run import DailyRunService
+from adwatch.operations.fact_sync import (
+    export_facts,
+    export_facts_to_path,
+    import_facts,
+    publish_facts,
+)
 from adwatch.operations.launch_checklist import (
     LaunchReadiness,
     build_launch_checklist,
@@ -73,6 +80,7 @@ from adwatch.operations.scheduler import (
 )
 from adwatch.orders.fulfillment import FulfillmentService
 from adwatch.orders.repository import OrderRepository
+from adwatch.orders.shopee_order_export import parse_order_export
 from adwatch.orders.sync import OperationsSyncService
 from adwatch.orders.ziniao_sync import (
     OrderSyncError,
@@ -120,6 +128,28 @@ def build_parser() -> argparse.ArgumentParser:
     backup_create.add_argument("--output", type=Path, required=True)
     backup_verify = backup_commands.add_parser("verify")
     backup_verify.add_argument("--path", type=Path, required=True)
+    replicate = subcommands.add_parser("replicate")
+    replicate_commands = replicate.add_subparsers(dest="replicate_command")
+    replicate_export = replicate_commands.add_parser("export")
+    replicate_export.add_argument(
+        "--from", dest="start", type=date.fromisoformat, required=True
+    )
+    replicate_export.add_argument(
+        "--to", dest="end", type=date.fromisoformat, required=True
+    )
+    replicate_export.add_argument("--output", type=Path, required=True)
+    replicate_import = replicate_commands.add_parser("import")
+    source = replicate_import.add_mutually_exclusive_group(required=True)
+    source.add_argument("--file", type=Path)
+    source.add_argument("--stdin", action="store_true")
+    replicate_publish = replicate_commands.add_parser("publish")
+    replicate_publish.add_argument(
+        "--from", dest="start", type=date.fromisoformat, required=True
+    )
+    replicate_publish.add_argument(
+        "--to", dest="end", type=date.fromisoformat, required=True
+    )
+    replicate_publish.add_argument("--target")
     approval = subcommands.add_parser("approval")
     approval_commands = approval.add_subparsers(dest="approval_command")
     approval_serve = approval_commands.add_parser("serve")
@@ -177,6 +207,11 @@ def build_parser() -> argparse.ArgumentParser:
     import_minimal.add_argument("--file", type=Path, required=True)
     import_orders = business_commands.add_parser("import-orders")
     import_orders.add_argument("--file", type=Path, required=True)
+    import_shopee_orders = business_commands.add_parser(
+        "import-shopee-orders"
+    )
+    import_shopee_orders.add_argument("--file", type=Path, required=True)
+    import_shopee_orders.add_argument("--store", required=True)
     map_store_command = business_commands.add_parser("map-store")
     map_store_command.add_argument("--platform", required=True)
     map_store_command.add_argument("--source", required=True)
@@ -221,6 +256,25 @@ def build_parser() -> argparse.ArgumentParser:
         default="available",
     )
     set_fulfillment.add_argument("--note", default="")
+    set_store_fulfillment = business_commands.add_parser(
+        "set-store-fulfillment-default"
+    )
+    set_store_fulfillment.add_argument("--platform", required=True)
+    set_store_fulfillment.add_argument("--store", required=True)
+    set_store_fulfillment.add_argument(
+        "--effective-date", type=date.fromisoformat, required=True
+    )
+    set_store_fulfillment.add_argument(
+        "--mode",
+        choices=("supplier_fulfilled", "stocked"),
+        required=True,
+    )
+    set_store_fulfillment.add_argument(
+        "--supply-status",
+        choices=("available", "paused"),
+        default="available",
+    )
+    set_store_fulfillment.add_argument("--note", default="")
     bulk_fulfillment = business_commands.add_parser(
         "mark-current-skus-supplier-fulfilled"
     )
@@ -466,15 +520,30 @@ def main(argv: list[str] | None = None) -> int:
                     """
                 ).fetchone()
             )
+            has_shopee_campaign = bool(
+                connection.execute(
+                    """
+                    SELECT 1 FROM daily_ad_metrics
+                    WHERE platform='shopee' AND source!='mock' LIMIT 1
+                    """
+                ).fetchone()
+            )
         checks = readiness_status(
             bridge_ready=_ziniao_bridge_ready(),
             has_tiktok_campaign=has_tiktok_campaign,
             has_business_costs=has_business_costs,
             feishu_callback_ready=settings.feishu_callback_ready,
+            has_shopee_campaign=has_shopee_campaign,
+            tiktok_enabled=settings.tiktok_collection_enabled,
+            feishu_callback_enabled=bool(settings.feishu_callback_secret),
+            live_writes_enabled=settings.live_writes,
+            production_publish_ready=bool(settings.publish_ssh_target),
         )
         for check in checks:
             print(f"{check.name}={check.status}")
-        return 0 if all(item.status == "ready" for item in checks) else 2
+        return 0 if all(
+            item.status in {"ready", "disabled"} for item in checks
+        ) else 2
     if args.command == "launch-checklist":
         database.migrate()
         with database.connect() as connection:
@@ -511,35 +580,78 @@ def main(argv: list[str] | None = None) -> int:
                        OR shopee_product_id IS NOT NULL
                 )
                 OR (
-                    EXISTS(SELECT 1 FROM platform_order_lines)
+                    EXISTS(SELECT 1 FROM effective_order_sku_lines)
                     AND NOT EXISTS(
-                        SELECT 1 FROM platform_order_lines AS orders
+                        SELECT 1 FROM effective_order_sku_lines AS orders
                         WHERE lower(orders.order_status) NOT IN (
                                 'cancelled', 'canceled'
                             )
                           AND (
-                            TRIM(orders.seller_sku)=''
-                            OR NOT EXISTS(
-                               SELECT 1 FROM sku_cost_history AS cost
-                               WHERE cost.platform=orders.platform
-                                 AND cost.store=orders.store
-                                 AND cost.seller_sku=orders.seller_sku
-                                 AND cost.effective_date<=
-                                     substr(orders.ordered_at, 1, 10)
-                           )
-                           OR NOT EXISTS(
-                               SELECT 1
-                               FROM sku_fulfillment_history AS fulfillment
-                               WHERE fulfillment.platform=orders.platform
-                                 AND fulfillment.store=orders.store
-                                 AND fulfillment.seller_sku=
-                                     orders.seller_sku
-                                 AND fulfillment.effective_date<=
-                                     substr(orders.ordered_at, 1, 10)
-                           )
+                            TRIM(orders.sku_identity)=''
+                            OR (
+                              NOT (
+                                orders.item_id=orders.seller_sku
+                                AND orders.model_id=orders.seller_sku
+                              )
+                              AND NOT EXISTS(
+                                SELECT 1 FROM platform_sku_mappings AS sku
+                                WHERE sku.platform=orders.platform
+                                  AND sku.item_id=orders.item_id
+                                  AND sku.model_id=orders.model_id
+                                  AND COALESCE(
+                                      (
+                                        SELECT alias.canonical_store
+                                        FROM store_aliases AS alias
+                                        WHERE alias.platform=sku.platform
+                                          AND alias.source_store=sku.store
+                                      ), sku.store
+                                  )=COALESCE(
+                                      (
+                                        SELECT alias.canonical_store
+                                        FROM store_aliases AS alias
+                                        WHERE alias.platform=orders.platform
+                                          AND alias.source_store=orders.store
+                                      ), orders.store
+                                  )
+                              )
+                            )
                           )
                     )
                 )
+                """
+            )
+            has_order_cost_coverage = exists(
+                """
+                SELECT 1
+                WHERE EXISTS(SELECT 1 FROM effective_order_sku_lines)
+                  AND NOT EXISTS(
+                    SELECT 1 FROM effective_order_sku_lines AS orders
+                    WHERE lower(orders.order_status) NOT IN (
+                            'cancelled', 'canceled'
+                        )
+                      AND NOT EXISTS(
+                        SELECT 1 FROM sku_cost_history AS cost
+                        WHERE cost.platform=orders.platform
+                          AND cost.seller_sku=orders.sku_identity
+                          AND cost.effective_date<=
+                              substr(orders.ordered_at, 1, 10)
+                          AND COALESCE(
+                              (
+                                SELECT alias.canonical_store
+                                FROM store_aliases AS alias
+                                WHERE alias.platform=cost.platform
+                                  AND alias.source_store=cost.store
+                              ), cost.store
+                          )=COALESCE(
+                              (
+                                SELECT alias.canonical_store
+                                FROM store_aliases AS alias
+                                WHERE alias.platform=orders.platform
+                                  AND alias.source_store=orders.store
+                              ), orders.store
+                          )
+                      )
+                  )
                 """
             )
             has_order_status_source = exists(
@@ -548,9 +660,16 @@ def main(argv: list[str] | None = None) -> int:
             inventory_not_applicable = exists(
                 """
                 SELECT 1
-                WHERE EXISTS(SELECT 1 FROM sku_fulfillment_history)
+                WHERE (
+                    EXISTS(SELECT 1 FROM sku_fulfillment_history)
+                    OR EXISTS(SELECT 1 FROM store_fulfillment_history)
+                )
                   AND NOT EXISTS(
                       SELECT 1 FROM sku_fulfillment_history
+                      WHERE mode='stocked'
+                  )
+                  AND NOT EXISTS(
+                      SELECT 1 FROM store_fulfillment_history
                       WHERE mode='stocked'
                   )
                 """
@@ -608,6 +727,7 @@ def main(argv: list[str] | None = None) -> int:
             shopee_campaign_validation=has_shopee_campaign,
             business_costs=has_business_costs,
             sku_mapping=has_sku_mapping,
+            order_cost_coverage=has_order_cost_coverage,
             refund_source=(
                 settings_rows.get("refund_source_configured") == "true"
                 or has_order_status_source
@@ -630,12 +750,18 @@ def main(argv: list[str] | None = None) -> int:
                 bool(settings.live_allowlist)
                 and has_three_day_reconciliation
             ),
+            production_publish=bool(settings.publish_ssh_target),
         )
-        excluded_codes = (
-            frozenset()
-            if settings.tiktok_collection_enabled
-            else frozenset({"tiktok_campaign_validation"})
-        )
+        excluded = {"platform_api_oauth"}
+        if not settings.tiktok_collection_enabled:
+            excluded.add("tiktok_campaign_validation")
+        if not settings.feishu_callback_secret:
+            excluded.add("feishu_callback")
+        if not settings.live_writes:
+            excluded.update(
+                {"rollback_drill", "selector_activation", "live_allowlist"}
+            )
+        excluded_codes = frozenset(excluded)
         items = build_launch_checklist(
             readiness,
             excluded_codes=excluded_codes,
@@ -1098,6 +1224,69 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         parser.print_help()
         return 2
+    if args.command == "replicate":
+        database.migrate()
+        if args.replicate_command == "export":
+            if args.start > args.end:
+                print("replicate start date must not be after end date")
+                return 2
+            destination = export_facts_to_path(
+                database,
+                start=args.start,
+                end=args.end,
+                destination=args.output,
+            )
+            print(f"replicate_export=ok path={destination}")
+            return 0
+        if args.replicate_command == "import":
+            payload = sys.stdin.buffer.read() if args.stdin else args.file.read_bytes()
+            try:
+                imported = import_facts(database, payload)
+                operations = OperationsSyncService(database).sync()
+                recalculation = AnalysisRecalculationService(database).run(
+                    start=imported.start,
+                    end=imported.end,
+                    destination=(
+                        settings.report_dir
+                        / (
+                            "replicated-recalculation-"
+                            f"{imported.start.isoformat()}-"
+                            f"{imported.end.isoformat()}.json"
+                        )
+                    ),
+                )
+            except (OSError, TypeError, ValueError) as error:
+                print(f"replicate_import=failed error={error}")
+                return 2
+            print(
+                f"replicate_import=ok rows={imported.rows} "
+                f"metrics={recalculation.metrics_processed} "
+                f"profits={recalculation.profit_results} "
+                f"pending={recalculation.pending_data} "
+                f"supplier_costed={operations.supplier_costed}"
+            )
+            return 0
+        if args.replicate_command == "publish":
+            target = args.target or settings.publish_ssh_target
+            if not target:
+                print("replicate_publish=failed error=SSH target is not configured")
+                return 2
+            try:
+                payload = export_facts(
+                    database, start=args.start, end=args.end
+                )
+                output = publish_facts(
+                    payload,
+                    target=target,
+                    container=settings.publish_container,
+                )
+            except (OSError, RuntimeError, ValueError) as error:
+                print(f"replicate_publish=failed error={error}")
+                return 2
+            print(f"replicate_publish=ok remote={output}")
+            return 0
+        parser.print_help()
+        return 2
     if args.command == "seed-business-data":
         database.migrate()
         count = AnalysisService(database).seed_mock_business_data(args.date)
@@ -1191,6 +1380,23 @@ def main(argv: list[str] | None = None) -> int:
                     f"total_cost_cny={summary.total_cost_cny:.2f}"
                 )
                 return 0
+            if args.business_command == "import-shopee-orders":
+                parsed = parse_order_export(
+                    args.file,
+                    store=args.store,
+                    source_updated_at=datetime.fromtimestamp(
+                        args.file.stat().st_mtime, UTC
+                    ),
+                )
+                orders = OrderRepository(database)
+                order_count = orders.upsert_orders(parsed.orders)
+                sku_count = orders.upsert_skus(parsed.skus)
+                print(
+                    "Imported Shopee orders: "
+                    f"orders={order_count} skus={sku_count} "
+                    f"rejected={len(parsed.rejected)}"
+                )
+                return 0
             if args.business_command == "map-store":
                 map_store(
                     database,
@@ -1263,6 +1469,21 @@ def main(argv: list[str] | None = None) -> int:
                     f"effective={args.effective_date.isoformat()}"
                 )
                 return 0
+            if args.business_command == "set-store-fulfillment-default":
+                FulfillmentService(database).set_store_default(
+                    platform=args.platform,
+                    store=args.store,
+                    effective_date=args.effective_date,
+                    mode=args.mode,
+                    supply_status=args.supply_status,
+                    note=args.note,
+                )
+                print(
+                    f"store_fulfillment={args.platform.lower()}:"
+                    f"{args.store} mode={args.mode} "
+                    f"effective={args.effective_date.isoformat()}"
+                )
+                return 0
             if args.business_command == "sync-exchange-rates":
                 try:
                     count = sync_exchange_rates(
@@ -1311,7 +1532,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         try:
             if args.schedule_command == "install":
-                status = manager.install()
+                status = manager.install(include_weekly=True)
                 print(
                     f"schedule=installed "
                     f"healthy={str(status.healthy).lower()} "

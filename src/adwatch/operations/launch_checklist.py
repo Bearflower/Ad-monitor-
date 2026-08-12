@@ -15,6 +15,7 @@ class LaunchReadiness:
     shopee_campaign_validation: bool = False
     business_costs: bool = False
     sku_mapping: bool = False
+    order_cost_coverage: bool = False
     refund_source: bool = False
     inventory_source: bool = False
     exchange_rate_source: bool = False
@@ -25,6 +26,7 @@ class LaunchReadiness:
     platform_api_oauth: bool = False
     three_day_reconciliation: bool = False
     live_allowlist: bool = False
+    production_publish: bool = False
 
 
 DESCRIPTIONS = {
@@ -33,6 +35,7 @@ DESCRIPTIONS = {
     "shopee_campaign_validation": "完成 Shopee Campaign 读取现场复验",
     "business_costs": "导入真实经营成本",
     "sku_mapping": "建立平台商品 ID 与 ERP SKU 映射",
+    "order_cost_coverage": "补齐所有有效订单 Seller SKU 的生效成本",
     "refund_source": "配置真实退款数据源",
     "inventory_source": "配置真实库存数据源",
     "exchange_rate_source": "配置每日汇率数据源",
@@ -43,6 +46,7 @@ DESCRIPTIONS = {
     "platform_api_oauth": "按需配置 TikTok/Shopee 官方 API OAuth",
     "three_day_reconciliation": "连续三天全链路对账准确率达到 99%",
     "live_allowlist": "配置 Live 店铺和 Campaign 精确允许清单",
+    "production_publish": "配置本地定时事实到生产 Dashboard 的 SSH 发布",
 }
 
 

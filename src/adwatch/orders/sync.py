@@ -80,6 +80,10 @@ class OperationsSyncService:
                         row["store"],
                         row["seller_sku"],
                         row["ordered_on"],
+                        order_id=row["order_id"],
+                        raw_seller_sku=row["raw_seller_sku"],
+                        product_name=row["product_name"],
+                        variation_name=row["variation_name"],
                     )
                     if cost is None:
                         counts["pending_cost"] += 1
@@ -95,6 +99,7 @@ class OperationsSyncService:
                             cost["effective_date"]
                         ),
                         status="returned",
+                        legacy_seller_sku=row["raw_seller_sku"],
                     ):
                         counts["returned"] += 1
                     else:
@@ -117,6 +122,10 @@ class OperationsSyncService:
                 row["store"],
                 row["seller_sku"],
                 row["ordered_on"],
+                order_id=row["order_id"],
+                raw_seller_sku=row["raw_seller_sku"],
+                product_name=row["product_name"],
+                variation_name=row["variation_name"],
             )
             if cost is None:
                 counts["pending_cost"] += 1
@@ -132,6 +141,7 @@ class OperationsSyncService:
                     cost_effective_date=date.fromisoformat(
                         cost["effective_date"]
                     ),
+                    legacy_seller_sku=row["raw_seller_sku"],
                 )
                 counts["supplier_costed" if changed else "unchanged"] += 1
                 continue
@@ -163,13 +173,16 @@ class OperationsSyncService:
         with self.database.connect() as connection:
             return connection.execute(
                 """
-                SELECT platform, canonical_store AS store, order_id, seller_sku,
+                SELECT platform, canonical_store AS store, order_id,
+                       sku_identity AS seller_sku,
+                       raw_seller_sku,
+                       product_name, variation_name,
                        quantity,
                        substr(ordered_at, 1, 10) AS ordered_on,
                        substr(source_updated_at, 1, 10) AS event_date,
                        order_status, logistics_status, refund_status,
                        resolution_status
-                FROM effective_platform_order_lines
+                FROM effective_order_sku_lines
                 ORDER BY ordered_on, order_id, seller_sku
                 """
             ).fetchall()
@@ -180,13 +193,18 @@ class OperationsSyncService:
         store: str,
         seller_sku: str,
         ordered_on: str,
+        *,
+        order_id: str,
+        raw_seller_sku: str,
+        product_name: str,
+        variation_name: str,
     ):
         with self.database.connect() as connection:
             stores = equivalent_store_names(
                 connection, platform=platform, store=store
             )
             placeholders = ", ".join("?" for _ in stores)
-            return connection.execute(
+            exact = connection.execute(
                 f"""
                 SELECT effective_date, unit_cost_cny
                 FROM sku_cost_history
@@ -202,6 +220,88 @@ class OperationsSyncService:
                     *stores,
                     seller_sku,
                     ordered_on,
+                    store,
+                ),
+            ).fetchone()
+            if exact is not None or raw_seller_sku == seller_sku:
+                return exact
+            frozen = connection.execute(
+                f"""
+                SELECT snapshot.cost_effective_date AS effective_date,
+                       snapshot.unit_cost_cny
+                FROM order_cost_snapshots AS snapshot
+                WHERE snapshot.platform=?
+                  AND snapshot.store IN ({placeholders})
+                  AND snapshot.order_id=?
+                  AND snapshot.seller_sku=?
+                  AND snapshot.status IN ('confirmed', 'returned')
+                  AND snapshot.cost_effective_date IS NOT NULL
+                  AND 1=(
+                      SELECT COUNT(*)
+                      FROM effective_order_sku_lines AS candidate
+                      WHERE candidate.platform=?
+                        AND candidate.canonical_store=?
+                        AND candidate.order_id=?
+                        AND candidate.raw_seller_sku=?
+                        AND candidate.resolution_status='ready'
+                  )
+                ORDER BY snapshot.created_at DESC, snapshot.store
+                LIMIT 1
+                """,
+                (
+                    platform.lower(),
+                    *stores,
+                    order_id,
+                    raw_seller_sku,
+                    platform.lower(),
+                    store,
+                    order_id,
+                    raw_seller_sku,
+                ),
+            ).fetchone()
+            if frozen is not None:
+                return frozen
+            return connection.execute(
+                f"""
+                SELECT cost.effective_date, cost.unit_cost_cny
+                FROM sku_cost_history AS cost
+                WHERE cost.platform=?
+                  AND cost.store IN ({placeholders})
+                  AND cost.seller_sku=?
+                  AND cost.effective_date<=?
+                  AND EXISTS (
+                      SELECT 1
+                      FROM platform_sku_mappings AS legacy
+                      WHERE legacy.platform=cost.platform
+                        AND legacy.store=cost.store
+                        AND legacy.seller_sku=cost.seller_sku
+                        AND LOWER(TRIM(COALESCE(legacy.product_name, '')))
+                            =LOWER(TRIM(?))
+                        AND LOWER(TRIM(COALESCE(legacy.variation_name, '')))
+                            =LOWER(TRIM(?))
+                  )
+                  AND 1=(
+                      SELECT COUNT(DISTINCT
+                          LOWER(TRIM(COALESCE(legacy.product_name, '')))
+                          || char(31) ||
+                          LOWER(TRIM(COALESCE(legacy.variation_name, '')))
+                      )
+                      FROM platform_sku_mappings AS legacy
+                      WHERE legacy.platform=cost.platform
+                        AND legacy.store=cost.store
+                        AND legacy.seller_sku=cost.seller_sku
+                  )
+                ORDER BY CASE WHEN cost.store=? THEN 0 ELSE 1 END,
+                         cost.effective_date DESC, cost.store
+                LIMIT 1
+                """,
+                (
+                    platform.lower(),
+                    *stores,
+                    raw_seller_sku,
+                    ordered_on,
+                    product_name,
+                    variation_name,
                     store,
                 ),
             ).fetchone()

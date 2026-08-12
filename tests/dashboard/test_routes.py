@@ -10,6 +10,7 @@ from adwatch.orders.repository import OrderRepository
 from adwatch.profit_sharing.service import ProfitSharingService
 from adwatch.reconciliation.balances import BalanceReconciliationService
 from adwatch.storage.db import Database
+from adwatch.strategy.service import StrategyRuleService
 
 
 def _seed_metrics(connection, data_date: date) -> None:
@@ -488,3 +489,23 @@ def test_inventory_recalculate_route_runs_all_metric_days_and_reports_gaps(
         0,
         2,
     )
+
+
+def test_strategy_shadow_route_does_not_require_finance_date(tmp_path):
+    database = Database(tmp_path / "shadow-route.sqlite3")
+    database.migrate()
+    router = DashboardRouter(
+        LedgerService(database),
+        csrf_token="secret",
+        database=database,
+        strategy_rule=StrategyRuleService(database),
+    )
+
+    response = router.post(
+        "/strategy-rules/shadow",
+        {"csrf_token": "secret", "parameters": "{}"},
+    )
+
+    assert response.status == 303
+    assert response.location is not None
+    assert response.location.startswith("/strategy-rules?shadow_results=")

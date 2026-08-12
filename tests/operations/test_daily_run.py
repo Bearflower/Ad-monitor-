@@ -120,6 +120,39 @@ def test_daily_run_orders_rate_bridge_order_sync_collection_and_analysis(tmp_pat
     ]
 
 
+def test_disabled_tiktok_is_excluded_from_knowledge_update(
+    tmp_path, monkeypatch
+):
+    captured = {}
+
+    class RecordingKnowledgeService:
+        def __init__(self, repository, cli, **kwargs):
+            captured.update(kwargs)
+
+        def update(self):
+            return None
+
+    monkeypatch.setattr(
+        daily_run_module, "KnowledgeService", RecordingKnowledgeService
+    )
+    settings = Settings(
+        data_dir=tmp_path,
+        ziniao_shopee_store_id="shopee-store",
+        ziniao_tiktok_store_id="tiktok-store",
+        tiktok_collection_enabled=False,
+    )
+    dependencies = ProductionDailyRunDependencies(
+        settings, Database(settings.database_path)
+    )
+
+    dependencies.update_knowledge("ziniao")
+
+    assert [source.key for source in captured["sources"]] == [
+        "shopee_th_seller_education"
+    ]
+    assert captured["store_ids"] == {}
+
+
 def test_daily_run_summary_reports_pending_order_identity():
     result = DailyRunResult(
         exit_code=2,

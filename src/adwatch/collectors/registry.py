@@ -101,9 +101,8 @@ class CollectorRegistry:
             self.settings, Platform(platform)
         )
 
-    @staticmethod
-    def _create_fallback(platform: str) -> Collector:
-        return FallbackCollector(platform)
+    def _create_fallback(self, platform: str) -> Collector:
+        return FallbackCollector(platform, settings=self.settings)
 
     def _get_health(
         self, platform: str

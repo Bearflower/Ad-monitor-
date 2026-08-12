@@ -2,8 +2,8 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# 复制源码和配置文件
-COPY pyproject.toml VERSION .env ./
+# 只复制构建所需文件；运行时配置由 Compose 注入，不进入镜像层
+COPY pyproject.toml VERSION ./
 COPY src/ src/
 
 # 安装依赖（非 editable 模式，避免 src/ 不存在问题）

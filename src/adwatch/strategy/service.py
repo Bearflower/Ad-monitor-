@@ -299,8 +299,19 @@ class StrategyRuleService:
                        SUM(CAST(spend AS REAL)) AS total_spend,
                        SUM(CAST(attributed_gmv AS REAL)) AS total_gmv,
                        SUM(orders) AS total_orders
-                FROM daily_ad_metrics
+                FROM daily_ad_metrics AS metric
                 WHERE data_date >= date('now', '-7 days')
+                  AND (
+                      metric.sku_id<>'__ALL__'
+                      OR NOT EXISTS (
+                          SELECT 1 FROM daily_ad_metrics AS detail
+                          WHERE detail.platform=metric.platform
+                            AND detail.store=metric.store
+                            AND detail.account_id=metric.account_id
+                            AND detail.data_date=metric.data_date
+                            AND detail.sku_id<>'__ALL__'
+                      )
+                  )
                 GROUP BY platform, store, campaign_id, sku_id
                 """
             ).fetchall()

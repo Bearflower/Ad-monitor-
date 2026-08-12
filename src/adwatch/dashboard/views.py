@@ -1806,6 +1806,16 @@ def render_inventory_page(
     # 拉取各模块数据
     missing_costs = service.list_missing_sku_costs()
     order_cost_gaps = service.list_order_cost_gaps()
+    missing_cost_keys = {
+        (item["platform"], item["store"], item["seller_sku"])
+        for item in missing_costs
+    }
+    order_cost_gaps = tuple(
+        item
+        for item in order_cost_gaps
+        if (item["platform"], item["store"], item["seller_sku"])
+        not in missing_cost_keys
+    )
     platform_sku_count = service.platform_sku_count()
     latest_platform_inventory = service.latest_platform_inventory()
     receipts = service.list_purchase_receipts()
@@ -1816,7 +1826,7 @@ def render_inventory_page(
     movements = all_movements[:50]
 
     # KPI 卡片数据
-    kpi_missing_count = len(order_cost_gaps)
+    kpi_missing_count = len(missing_costs)
     kpi_receipt_count = len(receipts)
     kpi_movement_count = len(all_movements)
     safe_notice_level = (

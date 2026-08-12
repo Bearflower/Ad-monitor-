@@ -132,6 +132,34 @@ def test_schedule_status_command_reports_stable_health(
     )
 
 
+def test_schedule_install_loads_daily_and_weekly_agents(
+    tmp_path, monkeypatch, capsys
+):
+    settings = Settings(data_dir=tmp_path)
+    monkeypatch.setattr(adwatch.cli.Settings, "from_env", lambda: settings)
+    calls = []
+
+    class FakeScheduleManager:
+        def __init__(self, **kwargs):
+            pass
+
+        def install(self, **kwargs):
+            calls.append(kwargs)
+            return ScheduleStatus(
+                healthy=True,
+                loaded=True,
+                enabled=True,
+                project_dir=tmp_path,
+                issues=(),
+            )
+
+    monkeypatch.setattr(adwatch.cli, "ScheduleManager", FakeScheduleManager)
+
+    assert main(["schedule", "install"]) == 0
+    assert calls == [{"include_weekly": True}]
+    assert "schedule=installed healthy=true" in capsys.readouterr().out
+
+
 def test_scheduled_daily_cli_invokes_due_wrapper(monkeypatch, capsys):
     calls = []
 
@@ -225,7 +253,8 @@ def test_readiness_cli_reports_pending_without_enabling_live(
     assert main(["readiness"]) == 2
     output = capsys.readouterr().out
     assert "ziniao_bridge=pending_external" in output
-    assert "live_writes=blocked" in output
+    assert "tiktok_campaign=disabled" in output
+    assert "live_writes=disabled" in output
 
 
 def test_monthly_report_cli_writes_local_file(tmp_path, monkeypatch, capsys):
@@ -261,7 +290,9 @@ def test_launch_checklist_cli_writes_markdown(tmp_path, monkeypatch, capsys):
     output = capsys.readouterr().out
     assert "# Adwatch 上线待办" in output
     assert "ziniao_bridge" in output
-    assert "live_allowlist" in output
+    assert "live_allowlist" not in output
+    assert "platform_api_oauth" not in output
+    assert "production_publish" in output
 
 
 def test_launch_checklist_cli_excludes_disabled_tiktok_gate(
@@ -408,14 +439,45 @@ def test_supplier_sku_facts_clear_mapping_refund_and_inventory_gates(
               'returned','2026-07-23','2026-07-24T00:00:00Z')
             """
         )
+        connection.execute(
+            """
+            INSERT INTO platform_sku_mappings VALUES(
+              'shopee','shop','SKU-1','SKU-1','SKU-1','1 bag',
+              'Product',0,'2026-07-24T00:00:00Z')
+            """
+        )
 
     assert main(["launch-checklist", "--format", "markdown"]) == 0
 
     output = capsys.readouterr().out
     assert "business_costs" not in output
     assert "sku_mapping" not in output
+    assert "order_cost_coverage" not in output
     assert "refund_source" not in output
     assert "inventory_source" not in output
+
+
+def test_supplier_store_default_makes_inventory_not_applicable(
+    tmp_path, monkeypatch, capsys
+):
+    settings = Settings(data_dir=tmp_path)
+    monkeypatch.setattr(adwatch.cli.Settings, "from_env", lambda: settings)
+    monkeypatch.setattr(adwatch.cli, "_ziniao_bridge_ready", lambda: True)
+    database = Database(settings.database_path)
+    database.migrate()
+    with database.transaction() as connection:
+        connection.execute(
+            """
+            INSERT INTO store_fulfillment_history VALUES(
+              'shopee','shop','2026-01-01','supplier_fulfilled',
+              'available','default supplier fulfilled',
+              '2026-01-01T00:00:00Z')
+            """
+        )
+
+    assert main(["launch-checklist", "--format", "markdown"]) == 0
+
+    assert "inventory_source" not in capsys.readouterr().out
 
 
 def test_cancelled_order_without_sku_facts_does_not_block_mapping_gate(
@@ -521,7 +583,7 @@ def test_business_sync_orders_reports_pending_facts(
     assert "pending_fulfillment=1" in output
 
 
-def test_business_sync_orders_reports_pending_order_identity(
+def test_business_sync_orders_reports_unmapped_order_identity(
     tmp_path, monkeypatch, capsys
 ):
     settings = Settings(data_dir=tmp_path)
@@ -544,7 +606,8 @@ def test_business_sync_orders_reports_pending_order_identity(
 
     assert main(["business", "sync-orders"]) == 2
 
-    assert "pending_order_identity=1" in capsys.readouterr().out
+    output = capsys.readouterr().out
+    assert "pending_order_identity=1" in output
 
 
 def test_business_fulfillment_cli_sets_single_and_bulk_policies(

@@ -62,6 +62,9 @@ class OrderRepository:
                     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(platform, store, order_id, item_id, model_id)
                     DO UPDATE SET
+                        seller_sku=excluded.seller_sku,
+                        variation_name=excluded.variation_name,
+                        product_name=excluded.product_name,
                         quantity=excluded.quantity,
                         buyer_paid=excluded.buyer_paid,
                         order_status=excluded.order_status,
@@ -97,15 +100,68 @@ class OrderRepository:
         with self.database.connect() as connection:
             return connection.execute(
                 """
+                WITH mapped AS (
+                    SELECT
+                        sku.*,
+                        COALESCE(alias.canonical_store, sku.store)
+                            AS canonical_store,
+                        (
+                            SELECT COUNT(DISTINCT
+                                CASE
+                                    WHEN TRIM(COALESCE(
+                                        other.product_name, ''
+                                    )) <> ''
+                                      OR TRIM(COALESCE(
+                                          other.variation_name, ''
+                                      )) <> ''
+                                    THEN LOWER(TRIM(COALESCE(
+                                        other.product_name, ''
+                                    ))) || char(31) ||
+                                         LOWER(TRIM(COALESCE(
+                                             other.variation_name, ''
+                                         )))
+                                    ELSE other.item_id || char(31) ||
+                                         other.model_id
+                                END
+                            )
+                            FROM platform_sku_mappings AS other
+                            LEFT JOIN store_aliases AS other_alias
+                              ON other_alias.platform=other.platform
+                             AND other_alias.source_store=other.store
+                            WHERE other.platform=sku.platform
+                              AND COALESCE(
+                                  other_alias.canonical_store, other.store
+                              )=COALESCE(
+                                  alias.canonical_store, sku.store
+                              )
+                              AND other.seller_sku=sku.seller_sku
+                        ) AS identity_count
+                    FROM platform_sku_mappings AS sku
+                    LEFT JOIN store_aliases AS alias
+                      ON alias.platform=sku.platform
+                     AND alias.source_store=sku.store
+                ),
+                identified AS (
+                    SELECT
+                        mapped.*,
+                        CASE
+                            WHEN identity_count > 1
+                            THEN seller_sku || ' [' || item_id || ':'
+                                 || model_id || ']'
+                            ELSE seller_sku
+                        END AS sku_identity
+                    FROM mapped
+                )
                 SELECT
                     sku.platform, sku.store, sku.product_name,
-                    sku.item_id, sku.model_id, sku.seller_sku,
+                    sku.item_id, sku.model_id,
+                    sku.sku_identity AS seller_sku,
                     sku.variation_name, sku.inventory_units,
                     substr(sku.observed_at, 1, 10) AS first_seen_date,
                     MAX(orders.ordered_at) AS latest_order_date,
                     COUNT(DISTINCT orders.order_id) AS pending_orders,
                     COALESCE(SUM(orders.quantity), 0) AS pending_units
-                FROM platform_sku_mappings AS sku
+                FROM identified AS sku
                 LEFT JOIN platform_order_lines AS orders
                   ON orders.platform=sku.platform
                  AND orders.store=sku.store
@@ -115,23 +171,19 @@ class OrderRepository:
                      NOT IN ('cancelled', 'canceled')
                 WHERE NOT EXISTS (
                     SELECT 1 FROM sku_cost_history AS cost
+                    LEFT JOIN store_aliases AS cost_alias
+                      ON cost_alias.platform=cost.platform
+                     AND cost_alias.source_store=cost.store
                     WHERE cost.platform=sku.platform
-                      AND cost.store=sku.store
-                      AND cost.seller_sku=sku.seller_sku
+                      AND COALESCE(
+                          cost_alias.canonical_store, cost.store
+                      )=sku.canonical_store
+                      AND cost.seller_sku=sku.sku_identity
                 )
-                  AND (
-                    orders.order_id IS NOT NULL
-                    OR NOT EXISTS (
-                        SELECT 1 FROM platform_order_lines AS all_orders
-                        WHERE all_orders.platform=sku.platform
-                          AND all_orders.store=sku.store
-                          AND all_orders.item_id=sku.item_id
-                          AND all_orders.model_id=sku.model_id
-                    )
-                  )
+                  AND orders.order_id IS NOT NULL
                 GROUP BY
                     sku.platform, sku.store, sku.product_name,
-                    sku.item_id, sku.model_id, sku.seller_sku,
+                    sku.item_id, sku.model_id, sku.sku_identity,
                     sku.variation_name, sku.inventory_units,
                     first_seen_date
                 ORDER BY sku.store, sku.product_name, sku.variation_name

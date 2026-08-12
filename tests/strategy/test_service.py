@@ -261,6 +261,32 @@ def test_run_shadow_does_not_write_to_recommendations(strategy_service):
     assert after == before
 
 
+def test_run_shadow_prefers_sku_details_over_overview(strategy_service):
+    service, database = strategy_service
+    with database.transaction() as connection:
+        for campaign, sku, spend, gmv in (
+            ("Shop Ads", "__ALL__", "300", "600"),
+            ("Campaign A", "SKU-1", "100", "200"),
+            ("Campaign B", "SKU-2", "200", "400"),
+        ):
+            connection.execute(
+                """
+                INSERT INTO daily_ad_metrics(
+                    platform,store,account_id,campaign_id,sku_id,data_date,
+                    currency,spend,attributed_gmv,orders,source
+                ) VALUES(
+                    'shopee','shop','account',?,?,date('now','-1 day'),
+                    'THB',?,?,1,'ziniao-cli'
+                )
+                """,
+                (campaign, sku, spend, gmv),
+            )
+
+    results = service.run_shadow({})
+
+    assert {row["sku_id"] for row in results} == {"SKU-1", "SKU-2"}
+
+
 def test_run_shadow_empty_data_returns_empty_list(strategy_service):
     """验证无数据时 run_shadow 返回空列表。"""
     service, _ = strategy_service

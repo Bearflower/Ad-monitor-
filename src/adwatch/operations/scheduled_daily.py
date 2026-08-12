@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
@@ -9,6 +9,7 @@ logger = logging.getLogger(__name__)
 
 from adwatch.config import Settings
 from adwatch.operations.daily_run import DailyRunService
+from adwatch.operations.fact_sync import export_facts, publish_facts
 from adwatch.operations.run_state import (
     RunLockUnavailable,
     RunStateStore,
@@ -103,6 +104,29 @@ def run_scheduled_daily(
                 mode="ziniao",
                 notify=True,
             )
+            if settings.publish_ssh_target and result.metrics_processed > 0:
+                try:
+                    publish_output = _publish_scheduled_facts(
+                        settings, locked_decision.report_date
+                    )
+                    print(f"scheduled_publish=ok remote={publish_output}")
+                except Exception as error:  # noqa: BLE001 - 发布失败需转 partial 并重试
+                    result = replace(
+                        result,
+                        status="partial",
+                        exit_code=2,
+                        messages=(
+                            *result.messages,
+                            (
+                                "publish=failed "
+                                f"error={type(error).__name__}: {error}"
+                            ),
+                        ),
+                    )
+                    print(
+                        "scheduled_publish=failed "
+                        f"error={type(error).__name__}: {error}"
+                    )
             store.record_result(
                 current,
                 locked_decision.report_date,
@@ -121,6 +145,18 @@ def run_scheduled_daily(
             "reason=already_running"
         )
         return 0
+
+
+def _publish_scheduled_facts(settings: Settings, report_date: date) -> str:
+    start = report_date - timedelta(days=settings.shopee_history_lookback_days)
+    database = Database(settings.database_path)
+    database.migrate()
+    payload = export_facts(database, start=start, end=report_date)
+    return publish_facts(
+        payload,
+        target=settings.publish_ssh_target,
+        container=settings.publish_container,
+    )
 
 
 def _is_last_week_of_month(week_end: date) -> bool:

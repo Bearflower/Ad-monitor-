@@ -212,3 +212,43 @@ def test_business_pending_sku_cost_commands(tmp_path, monkeypatch, capsys):
     ) == 0
     assert output.is_file()
     assert "Exported 0 pending SKU costs" in capsys.readouterr().out
+
+
+def test_business_set_store_fulfillment_default_cli(
+    tmp_path, monkeypatch, capsys
+):
+    settings = _settings(tmp_path)
+    monkeypatch.setattr(Settings, "from_env", lambda: settings)
+
+    assert main(
+        [
+            "business",
+            "set-store-fulfillment-default",
+            "--platform",
+            "shopee",
+            "--store",
+            "虾皮泰国",
+            "--effective-date",
+            "2026-01-01",
+            "--mode",
+            "supplier_fulfilled",
+            "--note",
+            "店铺默认货盘代发；自发货 SKU 单独覆盖",
+        ]
+    ) == 0
+    assert (
+        "store_fulfillment=shopee:虾皮泰国 "
+        "mode=supplier_fulfilled effective=2026-01-01"
+        in capsys.readouterr().out
+    )
+    database = Database(settings.database_path)
+    with database.connect() as connection:
+        row = connection.execute(
+            "SELECT mode, supply_status, note "
+            "FROM store_fulfillment_history"
+        ).fetchone()
+    assert tuple(row) == (
+        "supplier_fulfilled",
+        "available",
+        "店铺默认货盘代发；自发货 SKU 单独覆盖",
+    )

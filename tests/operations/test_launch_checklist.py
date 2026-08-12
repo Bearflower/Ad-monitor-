@@ -15,6 +15,7 @@ def test_launch_checklist_includes_every_external_gate():
         "shopee_campaign_validation",
         "business_costs",
         "sku_mapping",
+        "order_cost_coverage",
         "refund_source",
         "inventory_source",
         "exchange_rate_source",
@@ -25,6 +26,7 @@ def test_launch_checklist_includes_every_external_gate():
         "platform_api_oauth",
         "three_day_reconciliation",
         "live_allowlist",
+        "production_publish",
     }
 
 

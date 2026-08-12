@@ -1,5 +1,28 @@
 # 执行进度
 
+## 2026-08-11 全量遗留收口（发布前）
+
+- 修复 Shopee 概览与 SKU 明细双算、质量报告日期序列化、备用采集空实现和 Shadow 概览重复。
+- 每日/每周调度均已加载为 healthy；TikTok、飞书回调、Live 写入和 OAuth 按已确认范围正确排除。
+- 新增事实包 `replicate export|import|publish`，本地每日任务可通过 SSH stdin 安全更新生产事实并触发重算。
+- 新增店铺默认履约 CLI，已设置“默认货盘代发、自发货 SKU 覆盖”；同步结果 pending_fulfillment=0、pending_order_identity=0。
+- 处理重复 Seller SKU：291 个待补映射生成 291 个唯一成本键，未知映射继续拒绝自动归并。
+- 本地 Shadow 返回 34 条、recommendations 写入前后均为 0；最终 609 项测试、Ruff、compileall 通过。
+- 生产镜像 `9f7864ec-440b-49b2-ba28-e2e0c9501b05` 健康，镜像 ID 一致、schema 36、数据库 integrity=ok，源码包与镜像均不含 `.env`。
+- 事实已发布至 2026-08-10；8 月 4—7 日退款 T+3 已关账为有来源的 0，8 月 8—10 日按时间窗保持 pending。
+- 生产 Shadow 按钮 POST=303，策略/审批/库存/首页均 200，recommendations 前后保持 0。
+- 每日 LaunchAgent 手动全链路完成，last exit code=0，事实发布成功；禁用 TikTok 时知识库也不再访问 TikTok 店铺。
+- 真实业务待补仅剩订单成本与连续三日对账，禁止猜填；最新成本表见 `var/reports/待补SKU成本-2026-08-11.xlsx`。
+
+## 2026-08-11
+
+- 用户要求回到任务清单并争取当天收口全部遗留；已启用文件化任务规划，开始按代码、测试、CLI、调度和生产现场重建真实清单。
+- 首轮验证完成：全量测试 `590 passed, 2 failed`，Ruff 5 项；P2-B 两个页面线上 200；每日调度已加载但每周调度缺失；Bridge 当前正常。
+- 已确认旧路线图存在状态滞后，新增 T0—T8 唯一执行清单；TikTok、官方 OAuth、Live 写入继续排除，连续三日验收不得伪造。
+- T1 完成：补齐 `business import-shopee-orders` CLI 接入；货盘代发订单不再被库存快照门禁阻塞，混合/自有库存仍按订单 SKU 校验；修复 Ruff 5 项。专项回归 83 项通过，Ruff 全绿。
+- T2 现场取证：Shopee 真实广告 DOM 将商品身份和指标拆成两张对齐表；旧脚本按单表行解析导致 0 明细。修复后第一页现场返回 11 个商品/指标行、10 条商品明细、共 4 页。
+- 首次真实重采在写质量报告时失败：隔离详情含 `date`，现有 JSON 编码器不支持；已记录并停止盲目重跑。
+
 ## 2026-08-04
 
 - 用户要求根据根目录 `findings.md` 制定开发计划；发现已有 `docs/plans/2026-08-04-adwatch-remaining-gap-closure.md`，本轮将审校并定稿该唯一计划，避免产生冲突版本。
@@ -197,3 +220,36 @@
 - 生产验收发现 8 条/14 件为“单价与成本生效日正确、但数量不足”的历史半截快照；补充受限 top-up：仅在唯一别名等价快照的状态、单价、生效日全部匹配时补齐数量，不匹配快照保持原样并继续待补。专项回归 `60 passed`。
 - 最终发布：无 `.env` 源码包（145 文件，SHA256 `23a43b50a64e03b329d646926fc5ea9e6b6ced2c93c386568ad6097d80926d4c`）已部署；备份 `/root/adwatch/var/backups/adwatch-before-effective-order-lines-topup-20260810-1325.sqlite3`（SHA256 `6187228302d635d93600ab59b1afcbefbfbe5e60a22bd03372ecf0f22ffaaace`）已保留，镜像 `sha256:4663c7608388812f500bc0d4f409eca76f0c2631b0e7b0d26917f2e7607ed1b9`、容器 healthy、`.env` 未变。
 - 生产 `business sync-orders`：安全补齐 8 条半截快照，`pending_order_identity=0`；订单成本缺口从 8 条/14 件降至 `0`。13 天重算仍为 `profit_results=0/pending_data=13`，原因保持为退款同步覆盖缺失；SQLite integrity、经营页和库存页 HTTP 均通过。
+# 2026-08-11（续）
+
+- Shopee 实页第二次采集成功：34 条全部入库，0 隔离，概览/明细消耗对账误差 0.01，状态 matched。
+- 发现并修复经营汇总重复累加概览与 SKU 明细的问题。
+- TDD 新增 `test_rollups_prefer_overview_over_matching_sku_details`，先复现 600/1310/10 的双倍结果，修复后日报、趋势、周报、月报均回到 300/655/5。
+- 当前验证：`tests/reporting/test_read_model.py` 14 passed；`ruff check src tests` 通过。
+- 全量验证：596 passed。
+- 修复 `schedule install` 只安装日报、不安装周报的契约缺陷；新增 CLI 回归测试。
+- 已在本机重新安装两个 LaunchAgent；`schedule=healthy loaded=true enabled=true`。日报当前运行，周报已加载并按周一 09:00 触发，最近退出码 0。
+- 完成备用采集重构并真实验收：`虾皮泰国 / spend=300.00 / GMV=655.00 / orders=5 / fallback-shopee`。
+- 实验与 Shadow 相关测试 99 passed；备用采集/注册中心测试 21 passed。
+- 新增安全事实复制链路与定时发布：本地导出 2026-08-07..10 得到 304KB 包，包含 37 条广告指标、25 条订单、282 条库存快照、71 条 SKU 成本及关联事实；复制服务测试 2 passed，调度发布失败会保持 partial 以便重试。
+
+## 2026-08-11：方案 A 旧成本安全继承上线
+
+- 业务 SKU 身份按规范商品名称+规格收敛旧合成 ID 与真实 Item/Model；不同商品复用 Seller SKU 时继续拆分，订单事实同步不再写入展示用装饰键。
+- 库存页按真实缺成本 SKU 展示并折叠重复订单快照缺口；未成交货架 SKU 不进入待补导出；退货别名状态不再制造假缺口。
+- 本地门禁：pytest `619 passed`，Ruff、compileall、`git diff --check`、SQLite `integrity_check` 均通过。
+- 首次上线发现生产 SQLite 不支持相关子查询 `ORDER BY` 外层引用，追加 schema 39 窗口函数兼容迁移；重建后容器镜像与 `adwatch:latest` ID 一致且 healthy。
+- 生产同步后页面从 10 个缺成本 SKU/15 个订单缺口收敛为 8 个真实缺成本 SKU/11 个关联订单，页面重复订单缺口条目为 0。
+- 利润重算覆盖 2026-07-21..2026-08-10，生成 11 条利润结果；7/28、7/29、7/30、8/1、8/2、8/3、8/4、8/7 已成功生成。
+
+## 2026-08-12：全需求完成度盘点
+
+- 已恢复根目录规划、发现和进度文件；确认旧路线图复选框存在明显滞后，不能直接作为当前完成度。
+- 本轮采用原 45 项端到端能力矩阵，并按需求、代码、完整质量门禁和生产运行态四层重新验证。
+- 当前只读审计，不修改业务代码、生产数据或部署状态。
+- 新鲜质量门禁完成：pytest `619 passed`；Ruff、compileall、`git diff --check` 全部通过。
+- 本地 CLI 自检：Shopee Campaign、业务成本和生产发布配置 ready；TikTok/飞书回调/Live 按配置 disabled；Bridge 当时不可用。
+- 调度核对：日报和周报 LaunchAgent 均已加载，但日报 2026-08-12 最近退出码为 2，状态文件显示 2026-08-11 日报 failed；周报最近退出码 0。
+- 生产只读验收：容器 healthy 且镜像 ID 与 latest 一致，4 个核心页面 HTTP 200；迁移 39、SQLite integrity ok，数据最新至 2026-08-10。
+- 生产业务缺口：8 个真实缺成本 SKU、11 条关联订单缺口、11 个利润日期、42 条重算 pending、连续三日对账仅 1 日。
+- 实验体系审计确认仍为部分实现：无 CLI/Web 入口，生产页面 404、记录 0；分组使用 Python 随机化 hash，跨进程不稳定（新鲜复现 `PYTHONHASHSEED=1/2` 分别得到 A/B）。

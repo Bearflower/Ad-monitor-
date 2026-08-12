@@ -425,7 +425,7 @@ def test_inventory_strategy_gate_rejects_unrelated_or_stale_snapshots(tmp_path):
             """
             INSERT INTO order_fulfillment_snapshots VALUES(
               'shopee','Shopee TH Store','ORDER-1','ORDER-SKU',
-              'supplier_fulfilled','2026-07-01','available','sku_policy',
+              'stocked','2026-07-01','available','sku_policy',
               '2026-07-23T00:00:00Z')
             """
         )
@@ -434,6 +434,17 @@ def test_inventory_strategy_gate_rejects_unrelated_or_stale_snapshots(tmp_path):
             INSERT INTO order_cost_snapshots VALUES(
               'shopee','Shopee TH Store','ORDER-1','ORDER-SKU',1,'10','10',
               '2026-07-01','confirmed','2026-07-23T00:00:00Z')
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO inventory_movements(
+              id, seller_sku, movement_type, quantity_delta, occurred_on,
+              source_type, source_id, note, created_at
+            ) VALUES(
+              'movement-1','ORDER-SKU','sale_out',-1,'2026-07-23',
+              'order','shopee:Shopee TH Store:ORDER-1','',
+              '2026-07-23T00:00:00Z')
             """
         )
         connection.execute(
@@ -716,4 +727,46 @@ def test_daily_read_model_marks_supplier_fulfilled_inventory_not_applicable(
     assert (
         snapshot.capabilities["inventory_safe_strategy"]
         == "not_applicable"
+    )
+
+
+def test_rollups_prefer_overview_over_matching_sku_details(tmp_path):
+    data_date = date(2026, 8, 10)
+    database = Database(tmp_path / "overview-and-details.sqlite3")
+    database.migrate()
+    with database.transaction() as connection:
+        connection.executemany(
+            """
+            INSERT INTO daily_ad_metrics(
+                platform, store, account_id, campaign_id, sku_id, data_date,
+                currency, spend, attributed_gmv, orders, source
+            ) VALUES(
+                'shopee','shop','account',?,?,?,'THB',?,?,?,'ziniao-cli'
+            )
+            """,
+            (
+                ("Shop Ads", "__ALL__", data_date.isoformat(), "300", "655", 5),
+                ("Campaign A", "SKU-1", data_date.isoformat(), "100", "200", 2),
+                ("Campaign B", "SKU-2", data_date.isoformat(), "200", "455", 3),
+            ),
+        )
+
+    read_model = ReportReadModel(database)
+
+    daily = read_model.daily(data_date).platforms[0]
+    dashboard = read_model.dashboard(data_date).trends[7][-1]
+    weekly = read_model.weekly(data_date)["platforms"][0]
+    monthly = read_model.monthly(2026, 8)["platforms"][0]
+
+    assert (daily.spend, daily.gmv, daily.orders) == (
+        Decimal("300.00"), Decimal("655.00"), 5
+    )
+    assert (dashboard.spend, dashboard.gmv) == (
+        Decimal("300.0"), Decimal("655.0")
+    )
+    assert (weekly["spend"], weekly["gmv"], weekly["orders"]) == (
+        Decimal("300.00"), Decimal("655.00"), 5
+    )
+    assert (monthly["spend"], monthly["gmv"], monthly["orders"]) == (
+        Decimal("300.00"), Decimal("655.00"), 5
     )

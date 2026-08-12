@@ -1,27 +1,52 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import date
-from decimal import Decimal
 
 from adwatch.collectors.base import Collector
-from adwatch.collectors.ziniao_client import (
-    ZiniaoApiError,
-    ZiniaoCliClient,
-)
+from adwatch.collectors.ziniao_client import ZiniaoCliClient
+from adwatch.config import Settings
 from adwatch.domain import DailyAdMetric, Platform
+
+SHOPEE_TABLE_OVERVIEW_SCRIPT = r"""
+JSON.stringify((()=>{
+  const tables=Array.from(document.querySelectorAll("table.eds-table__body"));
+  const metricTable=tables.find(table=>{
+    const row=table.querySelector("tbody tr");
+    return !!row && row.querySelectorAll("td").length>=8
+      && /[฿$¥]|(?:THB|USD|CNY)/i.test(row.innerText||"");
+  });
+  if(!metricTable)return null;
+  const values=Array.from(
+    metricTable.querySelector("tbody tr").querySelectorAll("td")
+  ).map(cell=>(cell.innerText||cell.textContent||"").trim().replace(/\s+/g," "));
+  if(values.length<8)return null;
+  return {overview:{
+    expense:values[3], sales:values[4], orders:values[5],
+    items_sold:values[6], roas:values[7]
+  }};
+})())
+""".strip()
 
 
 class FallbackCollector(Collector):
-    """备用采集器：通过 Ziniao CLI 通用浏览器能力执行。
+    """Read only the Shopee overview through the low-level page bridge.
 
-    当主采集器（ZiniaoCollector）连续失败达到阈值时，
-    自动切换到此备用采集器。备用采集器使用更简单的策略，
-    只获取概览数据，不尝试获取明细。
+    The primary collector parses split campaign/SKU tables and paginates. This
+    collector deliberately uses the smaller, independent overview script so a
+    detail-table or pagination regression does not remove the store KPI.
     """
 
-    def __init__(self, platform: str) -> None:
+    def __init__(
+        self,
+        platform: str,
+        *,
+        settings: Settings | None = None,
+        cli_client: ZiniaoCliClient | None = None,
+    ) -> None:
         self._platform = Platform(platform)
-        self._client = ZiniaoCliClient()
+        self.settings = settings or Settings.from_env()
+        self._client = cli_client or ZiniaoCliClient()
 
     @property
     def platform(self) -> Platform:
@@ -32,55 +57,40 @@ class FallbackCollector(Collector):
         return f"fallback-{self._platform.value}"
 
     def collect(self, data_date: date) -> list[DailyAdMetric]:
-        """备用采集：只获取概览数据，不获取明细。"""
         if self._platform is Platform.SHOPEE:
             return self._collect_shopee(data_date)
-        return self._collect_tiktok(data_date)
+        return []
 
     def _collect_shopee(self, data_date: date) -> list[DailyAdMetric]:
-        """备用采集 Shopee 概览数据。"""
-        metrics: list[DailyAdMetric] = []
-        store_ids = getattr(self._client, "_store_ids", None)
-        if store_ids is None:
-            return metrics
-        for store_id in store_ids:
-            try:
-                row = self._client.navigate_and_exec(
-                    store_id=store_id,
-                    url_template="",
-                    script="",
-                    expected_url="",
-                    require_nonempty=False,
-                    params={"date": data_date.isoformat()},
-                )
-                if row and isinstance(row, dict):
-                    metrics.append(
-                        DailyAdMetric(
-                            platform=self._platform,
-                            store=row.get("store", "unknown"),
-                            account_id=row.get(
-                                "account_id", "fallback"
-                            ),
-                            campaign_id=row.get(
-                                "campaign_id", "fallback"
-                            ),
-                            sku_id="__ALL__",
-                            data_date=data_date,
-                            currency=row.get("currency", "THB"),
-                            spend=Decimal(
-                                str(row.get("spend", 0))
-                            ),
-                            attributed_gmv=Decimal(
-                                str(row.get("attributed_gmv", 0))
-                            ),
-                            orders=int(row.get("orders", 0)),
-                            source=self.source,
-                        )
-                    )
-            except (ZiniaoApiError, OSError):
-                continue
-        return metrics
+        from adwatch.collectors.ziniao import (
+            _thailand_day_timestamps,
+            parse_shopee_overview,
+        )
 
-    def _collect_tiktok(self, data_date: date) -> list[DailyAdMetric]:
-        # TikTok 备用采集暂未实现
-        return []
+        store_id = self.settings.ziniao_shopee_store_id
+        if not store_id:
+            return []
+        start, end = _thailand_day_timestamps(data_date)
+        expected = f"from={start}&to={end}"
+        url = (
+            "https://seller.shopee.co.th/portal/marketing/pas/index"
+            f"?from={start}&to={end}&type=new_cpc_homepage&group=custom"
+        )
+        result = self._client.navigate_and_exec(
+            store_id,
+            url,
+            SHOPEE_TABLE_OVERVIEW_SCRIPT,
+            expected_url=expected,
+            require_nonempty=True,
+        )
+        if not isinstance(result, dict) or not isinstance(
+            result.get("overview"), dict
+        ):
+            raise TypeError("Shopee fallback overview is incomplete")
+        metric = parse_shopee_overview(
+            result["overview"],
+            store=self.settings.ziniao_shopee_store_name,
+            account_id=store_id,
+            data_date=data_date,
+        )
+        return [replace(metric, source=self.source)]

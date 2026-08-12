@@ -37,6 +37,20 @@ validated_profits AS (
           AND lineage.data_date=profit.data_date
           AND lineage.status IN ('ready', 'carried_forward')
     )
+),
+effective_metrics AS (
+    SELECT metric.*
+    FROM daily_ad_metrics AS metric
+    WHERE metric.sku_id='__ALL__'
+       OR NOT EXISTS (
+           SELECT 1
+           FROM daily_ad_metrics AS overview
+           WHERE overview.platform=metric.platform
+             AND overview.store=metric.store
+             AND overview.account_id=metric.account_id
+             AND overview.data_date=metric.data_date
+             AND overview.sku_id='__ALL__'
+       )
 )
 """
 
@@ -195,7 +209,7 @@ class ReportReadModel:
                        COUNT(p.net_profit_cny) profit_count,
                        COUNT(r.rate_to_cny) rate_count,
                        COUNT(m.id) metric_count
-                FROM daily_ad_metrics m
+                FROM effective_metrics m
                 LEFT JOIN validated_profits p
                   ON p.platform=m.platform AND p.store=m.store
                  AND p.account_id=m.account_id
@@ -594,8 +608,7 @@ class ReportReadModel:
                 (day,),
             ).fetchall()
         }
-        inventory_ready_counts = _keyed_counts(
-            connection.execute(
+        inventory_strategy_rows = connection.execute(
                 """
                 WITH inventory_scope AS (
                     SELECT inventory.platform,
@@ -612,6 +625,7 @@ class ReportReadModel:
                     SELECT orders.platform,
                            COALESCE(alias.canonical_store, orders.store)
                                AS store,
+                           orders.order_id,
                            orders.seller_sku
                     FROM effective_platform_order_lines AS orders
                     LEFT JOIN store_aliases AS alias
@@ -621,47 +635,130 @@ class ReportReadModel:
                       AND substr(orders.ordered_at, 1, 10)=?
                       AND LOWER(TRIM(COALESCE(orders.order_status, '')))
                           NOT IN ('cancelled', 'canceled')
-                    GROUP BY orders.platform, store, orders.seller_sku
+                    GROUP BY orders.platform, store, orders.order_id,
+                             orders.seller_sku
+                ), fulfillment_scope AS (
+                    SELECT fulfillment.platform,
+                           COALESCE(alias.canonical_store, fulfillment.store)
+                               AS store,
+                           fulfillment.order_id,
+                           fulfillment.seller_sku,
+                           fulfillment.mode
+                    FROM order_fulfillment_snapshots AS fulfillment
+                    LEFT JOIN store_aliases AS alias
+                      ON alias.platform=fulfillment.platform
+                     AND alias.source_store=fulfillment.store
                 )
                 SELECT metrics.platform, metrics.store,
-                       COUNT(*) AS item_count
+                       SUM(CASE WHEN
+                         (
+                           metrics.sku_id<>'__ALL__'
+                           AND (
+                             EXISTS (
+                               SELECT 1 FROM inventory_scope AS inventory
+                               WHERE inventory.platform=metrics.platform
+                                 AND inventory.store=metrics.store
+                                 AND inventory.seller_sku=metrics.sku_id
+                             )
+                             OR (
+                               EXISTS (
+                                 SELECT 1 FROM order_scope AS orders
+                                 WHERE orders.platform=metrics.platform
+                                   AND orders.store=metrics.store
+                                   AND orders.seller_sku=metrics.sku_id
+                               )
+                               AND NOT EXISTS (
+                                 SELECT 1 FROM order_scope AS orders
+                                 WHERE orders.platform=metrics.platform
+                                   AND orders.store=metrics.store
+                                   AND orders.seller_sku=metrics.sku_id
+                                   AND NOT EXISTS (
+                                     SELECT 1
+                                     FROM fulfillment_scope AS fulfillment
+                                     WHERE fulfillment.platform=orders.platform
+                                       AND fulfillment.store=orders.store
+                                       AND fulfillment.order_id=orders.order_id
+                                       AND fulfillment.seller_sku=orders.seller_sku
+                                       AND fulfillment.mode='supplier_fulfilled'
+                                   )
+                               )
+                             )
+                           )
+                         )
+                         OR (
+                           metrics.sku_id='__ALL__'
+                           AND EXISTS (
+                             SELECT 1 FROM order_scope AS orders
+                             WHERE orders.platform=metrics.platform
+                               AND orders.store=metrics.store
+                           )
+                           AND NOT EXISTS (
+                             SELECT 1 FROM order_scope AS orders
+                             WHERE orders.platform=metrics.platform
+                               AND orders.store=metrics.store
+                               AND NOT EXISTS (
+                                 SELECT 1 FROM inventory_scope AS inventory
+                                 WHERE inventory.platform=orders.platform
+                                   AND inventory.store=orders.store
+                                   AND inventory.seller_sku=orders.seller_sku
+                               )
+                               AND NOT EXISTS (
+                                 SELECT 1
+                                 FROM fulfillment_scope AS fulfillment
+                                 WHERE fulfillment.platform=orders.platform
+                                   AND fulfillment.store=orders.store
+                                   AND fulfillment.order_id=orders.order_id
+                                   AND fulfillment.seller_sku=orders.seller_sku
+                                   AND fulfillment.mode='supplier_fulfilled'
+                               )
+                           )
+                         )
+                         THEN 1 ELSE 0 END) AS item_count,
+                       SUM(CASE WHEN
+                         EXISTS (
+                           SELECT 1 FROM order_scope AS orders
+                           WHERE orders.platform=metrics.platform
+                             AND orders.store=metrics.store
+                             AND (
+                               metrics.sku_id='__ALL__'
+                               OR orders.seller_sku=metrics.sku_id
+                             )
+                         )
+                         AND NOT EXISTS (
+                           SELECT 1 FROM order_scope AS orders
+                           WHERE orders.platform=metrics.platform
+                             AND orders.store=metrics.store
+                             AND (
+                               metrics.sku_id='__ALL__'
+                               OR orders.seller_sku=metrics.sku_id
+                             )
+                             AND NOT EXISTS (
+                               SELECT 1
+                               FROM fulfillment_scope AS fulfillment
+                               WHERE fulfillment.platform=orders.platform
+                                 AND fulfillment.store=orders.store
+                                 AND fulfillment.order_id=orders.order_id
+                                 AND fulfillment.seller_sku=orders.seller_sku
+                                 AND fulfillment.mode='supplier_fulfilled'
+                             )
+                         )
+                         THEN 1 ELSE 0 END) AS supplier_count
                 FROM daily_ad_metrics AS metrics
                 WHERE metrics.data_date=?
-                  AND (
-                    (
-                      metrics.sku_id<>'__ALL__'
-                      AND EXISTS (
-                        SELECT 1 FROM inventory_scope AS inventory
-                        WHERE inventory.platform=metrics.platform
-                          AND inventory.store=metrics.store
-                          AND inventory.seller_sku=metrics.sku_id
-                      )
-                    )
-                    OR (
-                      metrics.sku_id='__ALL__'
-                      AND EXISTS (
-                        SELECT 1 FROM order_scope AS orders
-                        WHERE orders.platform=metrics.platform
-                          AND orders.store=metrics.store
-                      )
-                      AND NOT EXISTS (
-                        SELECT 1 FROM order_scope AS orders
-                        WHERE orders.platform=metrics.platform
-                          AND orders.store=metrics.store
-                          AND NOT EXISTS (
-                            SELECT 1 FROM inventory_scope AS inventory
-                            WHERE inventory.platform=orders.platform
-                              AND inventory.store=orders.store
-                              AND inventory.seller_sku=orders.seller_sku
-                          )
-                      )
-                    )
-                  )
                 GROUP BY metrics.platform, metrics.store
                 """,
                 (day, day, day),
             ).fetchall()
-        )
+        inventory_ready_counts = {
+            (row["platform"], row["store"]): int(row["item_count"] or 0)
+            for row in inventory_strategy_rows
+        }
+        supplier_fulfilled_counts = {
+            (row["platform"], row["store"]): int(
+                row["supplier_count"] or 0
+            )
+            for row in inventory_strategy_rows
+        }
         profit_counts = _keyed_counts(
             connection.execute(
                 f"""
@@ -826,6 +923,7 @@ class ReportReadModel:
         )
         profit_covered = sum(profit_counts.values())
         inventory_covered = sum(inventory_ready_counts.values())
+        supplier_fulfilled = sum(supplier_fulfilled_counts.values())
         capabilities = {
             "platform_metrics": "ready" if metric_count else "pending_data",
             "estimated_profit": _coverage_status(
@@ -833,7 +931,10 @@ class ReportReadModel:
             ),
             "verified_profit": _coverage_status(profit_covered, metric_count),
             "inventory_safe_strategy": (
-                "ready"
+                "not_applicable"
+                if supplier_fulfilled == metric_count
+                and metric_count > 0
+                else "ready"
                 if profit_covered == metric_count
                 and inventory_covered == metric_count
                 and metric_count > 0
@@ -856,7 +957,7 @@ class ReportReadModel:
                        SUM(CAST(p.net_profit_cny AS REAL)) net_profit,
                        COUNT(p.net_profit_cny) profit_count,
                        COUNT(m.id) metric_count
-                FROM daily_ad_metrics AS m
+                FROM effective_metrics AS m
                 LEFT JOIN validated_profits AS p
                   ON p.platform=m.platform AND p.store=m.store
                  AND p.account_id=m.account_id
@@ -973,7 +1074,7 @@ class ReportReadModel:
                        COUNT(p.net_profit_cny) AS profit_count,
                        COUNT(r.rate_to_cny) AS rate_count,
                        COUNT(m.id) AS metric_count
-                FROM daily_ad_metrics m
+                FROM effective_metrics m
                 LEFT JOIN validated_profits p
                   ON p.platform=m.platform AND p.store=m.store
                  AND p.account_id=m.account_id
@@ -997,7 +1098,7 @@ class ReportReadModel:
                        SUM(CAST(p.net_profit_cny AS REAL)) AS net_profit,
                        COUNT(p.net_profit_cny) AS profit_count,
                        COUNT(m.id) AS metric_count
-                FROM daily_ad_metrics m
+                FROM effective_metrics m
                 LEFT JOIN validated_profits p
                   ON p.platform=m.platform AND p.store=m.store
                  AND p.account_id=m.account_id
@@ -1017,7 +1118,7 @@ class ReportReadModel:
                        SUM(CAST(p.net_profit_cny AS REAL)) AS net_profit,
                        COUNT(p.net_profit_cny) AS profit_count,
                        COUNT(m.id) AS metric_count
-                FROM daily_ad_metrics m
+                FROM effective_metrics m
                 LEFT JOIN validated_profits p
                   ON p.platform=m.platform AND p.store=m.store
                  AND p.account_id=m.account_id
@@ -1347,7 +1448,7 @@ class ReportReadModel:
                        COUNT(p.net_profit_cny) AS profit_count,
                        COUNT(r.rate_to_cny) AS rate_count,
                        COUNT(m.id) AS metric_count
-                FROM daily_ad_metrics m
+                FROM effective_metrics m
                 LEFT JOIN validated_profits p
                   ON p.platform=m.platform AND p.store=m.store
                  AND p.account_id=m.account_id
@@ -1371,7 +1472,7 @@ class ReportReadModel:
                        SUM(CAST(p.net_profit_cny AS REAL)) AS net_profit,
                        COUNT(p.net_profit_cny) AS profit_count,
                        COUNT(m.id) AS metric_count
-                FROM daily_ad_metrics m
+                FROM effective_metrics m
                 LEFT JOIN validated_profits p
                   ON p.platform=m.platform AND p.store=m.store
                  AND p.account_id=m.account_id
@@ -1391,7 +1492,7 @@ class ReportReadModel:
                        SUM(CAST(p.net_profit_cny AS REAL)) AS net_profit,
                        COUNT(p.net_profit_cny) AS profit_count,
                        COUNT(m.id) AS metric_count
-                FROM daily_ad_metrics m
+                FROM effective_metrics m
                 LEFT JOIN validated_profits p
                   ON p.platform=m.platform AND p.store=m.store
                  AND p.account_id=m.account_id

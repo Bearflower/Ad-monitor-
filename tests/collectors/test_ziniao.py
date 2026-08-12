@@ -6,6 +6,7 @@ import pytest
 from adwatch.collectors.ziniao import (
     ZiniaoCollector,
     ZiniaoNotConfigured,
+    pair_shopee_split_table_rows,
     parse_shopee_campaign_summary,
     parse_shopee_overview,
     parse_shopee_product_rows,
@@ -55,6 +56,82 @@ def test_parse_shopee_product_rows_maps_currency_and_primary_values():
     assert metric.orders == 16
     assert metric.currency == "THB"
     assert metric.source == "ziniao-cli"
+
+
+def test_pair_shopee_split_table_rows_matches_products_to_metrics():
+    rows = pair_shopee_split_table_rows(
+        [
+            "Shop GMV Max\nNo end date",
+            "Nike Body Spray\nID: 54562829508\nTrending",
+            "Nike Deo Spray\nID: 43982889013\nNew Products",
+        ],
+        [
+            ["3.3k", "81", "2.45%", "฿300.00", "฿655.00", "5"],
+            ["244", "8", "3.28%", "฿126.01", "฿208.00", "1"],
+            ["653", "9", "1.38%", "฿26.70", "฿207.00", "1"],
+        ],
+    )
+
+    assert rows == [
+        {
+            "campaign": "Shop GMV Max",
+            "product": "Nike Body Spray\nID: 54562829508\nTrending",
+            "metrics": [
+                "244", "8", "3.28%", "฿126.01", "฿208.00", "1"
+            ],
+        },
+        {
+            "campaign": "Shop GMV Max",
+            "product": "Nike Deo Spray\nID: 43982889013\nNew Products",
+            "metrics": [
+                "653", "9", "1.38%", "฿26.70", "฿207.00", "1"
+            ],
+        },
+    ]
+
+
+def test_shopee_collector_prefers_split_table_campaign_summary(tmp_path):
+    client = FakeCliClient(
+        {
+            "overview": {
+                "expense": "฿400.00",
+                "sales": "฿655.00",
+                "orders": "4",
+                "items_sold": "4",
+                "roas": "1.64",
+            },
+            "productRows": [
+                "Shop GMV Max\nNo end date",
+                "Nike Body Spray\nID: 54562829508\nTrending",
+            ],
+            "metricRows": [
+                [
+                    "3.3k", "81", "2.45%", "฿300.00", "฿655.00",
+                    "5", "5", "2.18"
+                ],
+                [
+                    "244", "8", "3.28%", "฿300.00", "฿655.00",
+                    "5", "5", "2.18"
+                ],
+            ],
+            "page": 1,
+            "totalPages": 1,
+            "hasNext": False,
+        }
+    )
+    settings = Settings(
+        data_dir=tmp_path,
+        ziniao_shopee_store_id="27679338786521",
+        ziniao_shopee_store_name="虾皮泰国",
+    )
+
+    metrics = ZiniaoCollector(
+        settings, Platform.SHOPEE, cli_client=client
+    ).collect(date(2026, 8, 10))
+
+    assert metrics[0].sku_id == "__ALL__"
+    assert metrics[0].spend == Decimal("300.00")
+    assert metrics[0].orders == 5
 
 
 def test_parse_shopee_product_rows_skips_summary_without_product_id():

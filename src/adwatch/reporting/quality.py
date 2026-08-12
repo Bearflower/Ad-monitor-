@@ -8,9 +8,11 @@ from adwatch.pipeline.runner import PipelineSummary
 
 
 def _json_default(value: object) -> str:
-    """JSON 序列化兜底：将 Decimal 转为字符串，其余类型抛出异常。"""
+    """Serialize exact numeric and calendar values in quality evidence."""
     if isinstance(value, Decimal):
         return str(value)
+    if isinstance(value, date):
+        return value.isoformat()
     raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")
 
 

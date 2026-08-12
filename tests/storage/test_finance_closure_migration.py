@@ -84,7 +84,7 @@ def test_migration_25_creates_finance_closure_schema(tmp_path):
         "purchase_receipts",
     ):
         assert {"created_by", "reversal_reason"} <= columns[table]
-    assert latest == 33
+    assert latest == 39
 
 
 def test_migration_25_backfills_legacy_actors_without_changing_facts(

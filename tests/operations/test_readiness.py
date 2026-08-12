@@ -11,4 +11,7 @@ def test_readiness_distinguishes_external_and_data_dependencies():
 
     assert ReadinessCheck("ziniao_bridge", "pending_external") in checks
     assert ReadinessCheck("business_costs", "pending_data") in checks
-    assert ReadinessCheck("live_writes", "blocked") in checks
+    assert ReadinessCheck("tiktok_campaign", "disabled") in checks
+    assert ReadinessCheck("feishu_callback", "disabled") in checks
+    assert ReadinessCheck("live_writes", "disabled") in checks
+    assert ReadinessCheck("production_publish", "pending_external") in checks

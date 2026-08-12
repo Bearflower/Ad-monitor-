@@ -10,6 +10,7 @@ from unittest.mock import patch
 import pytest
 
 from adwatch.collectors.fallback import FallbackCollector
+from adwatch.config import Settings
 from adwatch.domain import Platform
 
 
@@ -48,9 +49,11 @@ class TestFallbackCollectorInit:
 class TestFallbackCollectorCollect:
     """FallbackCollector.collect 方法测试。"""
 
-    def test_collect_shopee_no_store_ids(self) -> None:
+    def test_collect_shopee_no_store_ids(self, tmp_path) -> None:
         """Shopee 没有 store_ids 时返回空列表。"""
-        collector = FallbackCollector("shopee")
+        collector = FallbackCollector(
+            "shopee", settings=Settings(data_dir=tmp_path)
+        )
         result = collector.collect(date(2026, 8, 10))
         assert result == []
 
@@ -59,6 +62,47 @@ class TestFallbackCollectorCollect:
         collector = FallbackCollector("tiktok")
         result = collector.collect(date(2026, 8, 10))
         assert result == []
+
+    def test_collect_shopee_reads_configured_store_overview(self, tmp_path) -> None:
+        class Client:
+            def __init__(self):
+                self.calls = []
+
+            def navigate_and_exec(self, store_id, url, script, **kwargs):
+                self.calls.append((store_id, url, script, kwargs))
+                return {
+                    "overview": {
+                        "expense": "฿300.00",
+                        "sales": "฿655.00",
+                        "orders": "5",
+                        "items_sold": "5",
+                        "roas": "2.18",
+                    }
+                }
+
+        client = Client()
+        settings = Settings(
+            data_dir=tmp_path,
+            ziniao_shopee_store_id="27679338786521",
+            ziniao_shopee_store_name="虾皮泰国",
+        )
+        collector = FallbackCollector(
+            "shopee", settings=settings, cli_client=client
+        )
+
+        metrics = collector.collect(date(2026, 8, 10))
+
+        assert len(metrics) == 1
+        assert metrics[0].store == "虾皮泰国"
+        assert metrics[0].account_id == "27679338786521"
+        assert metrics[0].spend == 300
+        assert metrics[0].attributed_gmv == 655
+        assert metrics[0].orders == 5
+        assert metrics[0].source == "fallback-shopee"
+        assert client.calls[0][0] == "27679338786521"
+        assert "from=" in client.calls[0][1]
+        assert "table.eds-table__body" in client.calls[0][2]
+        assert client.calls[0][3]["require_nonempty"] is True
 
 
 class TestFallbackCollectorProtocol:

@@ -126,10 +126,10 @@ class AnalyticsRepository:
                         COALESCE(alias.canonical_store, line.store)
                             AS canonical_store,
                         line.order_id,
-                        line.seller_sku,
+                        line.sku_identity AS seller_sku,
                         SUM(line.quantity) AS expected_quantity,
                         MIN(substr(line.ordered_at, 1, 10)) AS order_date
-                    FROM effective_platform_order_lines AS line
+                    FROM effective_order_sku_lines AS line
                     LEFT JOIN store_aliases AS alias
                       ON alias.platform=line.platform
                      AND alias.source_store=line.store
@@ -144,7 +144,7 @@ class AnalyticsRepository:
                     GROUP BY
                         line.platform,
                         COALESCE(alias.canonical_store, line.store),
-                        line.order_id, line.seller_sku
+                        line.order_id, line.sku_identity
                 ),
                 expected_order_costs AS (
                     SELECT platform, canonical_store, order_date,

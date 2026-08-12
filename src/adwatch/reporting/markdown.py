@@ -45,7 +45,6 @@ STATUS_LABELS = {
     "not_applicable": "不适用（货盘代发）",
     "blocked": "已阻止",
     "ambiguous": "口径不明确",
-    "not_applicable": "不适用",
     "proposed": "待审批",
     "approved": "已批准",
     "rejected": "已拒绝",

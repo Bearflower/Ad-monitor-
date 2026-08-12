@@ -402,7 +402,7 @@ class ScheduleManager:
         )
 
     def repair(self) -> ScheduleStatus:
-        return self.install()
+        return self.install(include_weekly=True)
 
     def uninstall(self) -> ScheduleStatus:
         # 卸载日报调度

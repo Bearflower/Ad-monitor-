@@ -5,7 +5,7 @@ from decimal import Decimal
 from adwatch.inventory.models import PurchaseLine
 from adwatch.inventory.service import InventoryService
 from adwatch.orders.fulfillment import FulfillmentService
-from adwatch.orders.models import PlatformOrderLine
+from adwatch.orders.models import PlatformOrderLine, PlatformSku
 from adwatch.orders.repository import OrderRepository
 from adwatch.orders.sync import OperationsSyncService
 from adwatch.storage.db import Database
@@ -218,6 +218,133 @@ def test_supplier_fulfilled_order_costs_without_inventory(tmp_path):
     assert movements == 0
 
 
+def test_sync_safely_inherits_legacy_cost_for_same_product_identity(tmp_path):
+    database = Database(tmp_path / "legacy-cost.sqlite3")
+    database.migrate()
+    repository = OrderRepository(database)
+    observed_at = datetime(2026, 8, 10, 9, tzinfo=UTC)
+    with database.transaction() as connection:
+        connection.execute(
+            """
+            INSERT INTO store_aliases(platform, source_store, canonical_store)
+            VALUES ('shopee', 'legacy-shop', 'shop')
+            """
+        )
+    repository.upsert_skus(
+        (
+            PlatformSku(
+                "shopee", "legacy-shop", "legacy-item", "legacy-model",
+                "DUP", "Graphite 200ml", "Graphite spray", 0, observed_at,
+            ),
+            PlatformSku(
+                "shopee", "shop", "current-item", "current-model",
+                "DUP", "Graphite 200ml", "Graphite spray", 4, observed_at,
+            ),
+            PlatformSku(
+                "shopee", "shop", "other-item", "other-model",
+                "DUP", "Blue 200ml", "Blue spray", 4, observed_at,
+            ),
+        )
+    )
+    repository.upsert_orders(
+        (
+            PlatformOrderLine(
+                "shopee", "shop", "ORDER-LEGACY-COST", "current-item",
+                "current-model", "DUP", "Graphite 200ml", "Graphite spray",
+                1, Decimal(100), "THB", "completed", "delivered", "",
+                date(2026, 8, 10), observed_at,
+            ),
+        )
+    )
+    repository.set_sku_cost(
+        platform="shopee",
+        store="legacy-shop",
+        seller_sku="DUP",
+        effective_date=date(2026, 7, 1),
+        unit_cost_cny=Decimal(25),
+    )
+    FulfillmentService(database).set_policy(
+        platform="shopee",
+        store="shop",
+        seller_sku="DUP [current-item:current-model]",
+        effective_date=date(2026, 7, 1),
+        mode="supplier_fulfilled",
+        supply_status="available",
+    )
+
+    result = OperationsSyncService(database).sync()
+
+    assert result.supplier_costed == 1
+    assert result.pending_cost == 0
+    with database.connect() as connection:
+        snapshot = connection.execute(
+            """
+            SELECT seller_sku, unit_cost_cny FROM order_cost_snapshots
+            WHERE order_id='ORDER-LEGACY-COST'
+            """
+        ).fetchone()
+    assert tuple(snapshot) == ("DUP [current-item:current-model]", "25")
+
+
+def test_sync_rekeys_unique_raw_snapshot_for_decorated_legacy_order_fact(tmp_path):
+    database = Database(tmp_path / "decorated-order-fact.sqlite3")
+    database.migrate()
+    repository = OrderRepository(database)
+    observed_at = datetime(2026, 8, 10, 9, tzinfo=UTC)
+    repository.upsert_skus(
+        (
+            PlatformSku(
+                "shopee", "shop", "item-current", "model-current", "DUP",
+                "Graphite 200ml", "Graphite spray", 1, observed_at,
+            ),
+            PlatformSku(
+                "shopee", "shop", "item-other", "model-other", "DUP",
+                "Blue 200ml", "Blue spray", 1, observed_at,
+            ),
+        )
+    )
+    decorated = "DUP [item-current:model-current]"
+    repository.upsert_orders(
+        (
+            PlatformOrderLine(
+                "shopee", "shop", "ORDER-DECORATED", "item-current",
+                "model-current", decorated, "Graphite 200ml",
+                "Graphite spray", 1, Decimal(100), "THB", "completed",
+                "delivered", "", date(2026, 8, 10), observed_at,
+            ),
+        )
+    )
+    with database.transaction() as connection:
+        connection.execute(
+            """
+            INSERT INTO order_cost_snapshots VALUES(
+              'shopee','shop','ORDER-DECORATED','DUP',1,'25','25',
+              '2026-07-01','confirmed','2026-08-10T00:00:00Z')
+            """
+        )
+    FulfillmentService(database).set_policy(
+        platform="shopee",
+        store="shop",
+        seller_sku=decorated,
+        effective_date=date(2026, 7, 1),
+        mode="supplier_fulfilled",
+        supply_status="available",
+    )
+
+    result = OperationsSyncService(database).sync()
+
+    assert result.pending_cost == 0
+    assert result.unchanged == 1
+    with database.connect() as connection:
+        snapshots = connection.execute(
+            """
+            SELECT seller_sku, unit_cost_cny FROM order_cost_snapshots
+            WHERE order_id='ORDER-DECORATED'
+            """
+        ).fetchall()
+    assert [tuple(row) for row in snapshots] == [(decorated, "25")]
+
+
 def test_supplier_sync_tops_up_matching_partial_cost_snapshot(tmp_path):
     database = Database(tmp_path / "partial-supplier-cost.sqlite3")
     database.migrate()
@@ -320,29 +447,64 @@ def test_sync_uses_resolved_order_line_once_when_legacy_placeholder_exists(
     assert tuple(snapshot) == (1, "5", "5")
 
 
-def test_sync_keeps_multiple_resolved_order_lines_pending_for_review(tmp_path):
+def test_sync_keeps_distinct_products_when_seller_sku_is_reused(tmp_path):
     database = Database(tmp_path / "ambiguous-sync.sqlite3")
     database.migrate()
-    _set_policy(database, "supplier_fulfilled")
+    FulfillmentService(database).set_store_default(
+        platform="shopee",
+        store="shop",
+        effective_date=date(2026, 7, 1),
+        mode="supplier_fulfilled",
+        supply_status="available",
+    )
     orders = OrderRepository(database)
     orders.set_sku_cost(
         platform="shopee",
         store="shop",
-        seller_sku="SKU-1",
+        seller_sku="SKU-1 [item-ORDER-AMBIGUOUS:model-1]",
         effective_date=date(2026, 7, 1),
         unit_cost_cny=Decimal(5),
     )
+    orders.set_sku_cost(
+        platform="shopee",
+        store="shop",
+        seller_sku="SKU-1 [item-second:model-second]",
+        effective_date=date(2026, 7, 1),
+        unit_cost_cny=Decimal(7),
+    )
     first = _order("ORDER-AMBIGUOUS", quantity=1)
-    second = replace(first, item_id="item-second", model_id="model-second")
+    second = replace(
+        first,
+        item_id="item-second",
+        model_id="model-second",
+        variation_name="250ml",
+        product_name="Different product",
+    )
+    orders.upsert_skus(
+        (
+            PlatformSku(
+                "shopee", "shop", first.item_id, first.model_id,
+                first.seller_sku, first.variation_name, first.product_name,
+                0, datetime(2026, 7, 11, tzinfo=UTC),
+            ),
+            PlatformSku(
+                "shopee", "shop", second.item_id, second.model_id,
+                second.seller_sku, second.variation_name,
+                second.product_name, 0,
+                datetime(2026, 7, 11, tzinfo=UTC),
+            ),
+        )
+    )
     orders.upsert_orders((first, second))
 
     result = OperationsSyncService(database).sync()
 
-    assert result.pending_order_identity == 1
+    assert result.pending_order_identity == 0
+    assert result.supplier_costed == 2
     with database.connect() as connection:
         assert connection.execute(
             "SELECT COUNT(*) FROM order_cost_snapshots"
-        ).fetchone()[0] == 0
+        ).fetchone()[0] == 2
 
 
 def test_missing_fulfillment_policy_is_explicitly_pending(tmp_path):

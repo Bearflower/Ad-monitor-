@@ -236,6 +236,16 @@ lineage 为 unchanged；报告只保存汇总差异，不包含订单号或完�
 .venv/bin/adwatch schedule status
 ```
 
+本地紫鸟采集与生产 Dashboard 使用不同的 SQLite 文件。配置
+`ADWATCH_PUBLISH_SSH_TARGET=root@43.156.242.184` 后，每日任务会通过 SSH
+stdin 将版本化事实包导入生产容器；生产已有成本/履约配置优先，本地只补缺，
+不会上传 `.env` 或覆盖整库。也可手动执行：
+
+```bash
+.venv/bin/adwatch replicate publish \
+  --from 2026-08-07 --to 2026-08-10
+```
+
 每日顺序固定为：获取执行日 THB/CNY 汇率（无当天值时依次使用昨日和 7 天
 内最近有效交易日）→ 扫描并导入 Income 周结算 PDF → 检查紫鸟 Bridge → 回看并同步 Shopee 商品、
 订单、退款状态、物流和平台库存 → 采集已启用平台广告 → 分析 →

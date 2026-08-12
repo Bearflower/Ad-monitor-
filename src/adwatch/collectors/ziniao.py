@@ -89,6 +89,59 @@ def parse_shopee_product_rows(
     return metrics
 
 
+def pair_shopee_split_table_rows(
+    product_rows: list[str],
+    metric_rows: list[list[str]],
+) -> list[dict[str, object]]:
+    """Pair Shopee's fixed product table with its scrolling metrics table."""
+    campaign = "Shop GMV Max"
+    if product_rows:
+        campaign = product_rows[0].splitlines()[0].strip() or campaign
+    return [
+        {
+            "campaign": campaign,
+            "product": product,
+            "metrics": metrics,
+        }
+        for product, metrics in zip(product_rows, metric_rows, strict=False)
+        if re.search(r"\bID:\s*\d+", product) and len(metrics) >= 6
+    ]
+
+
+def _shopee_detail_rows(page: dict[str, object]) -> list[dict[str, object]]:
+    rows = page.get("rows")
+    if isinstance(rows, list) and rows:
+        return [row for row in rows if isinstance(row, dict)]
+    product_rows = page.get("productRows")
+    metric_rows = page.get("metricRows")
+    if not isinstance(product_rows, list) or not isinstance(metric_rows, list):
+        return []
+    return pair_shopee_split_table_rows(
+        [str(row) for row in product_rows],
+        [
+            [str(value) for value in row]
+            for row in metric_rows
+            if isinstance(row, list)
+        ],
+    )
+
+
+def _shopee_overview(page: dict[str, object]) -> dict[str, object] | None:
+    metric_rows = page.get("metricRows")
+    if isinstance(metric_rows, list) and metric_rows:
+        summary = metric_rows[0]
+        if isinstance(summary, list) and len(summary) >= 8:
+            return {
+                "expense": summary[3],
+                "sales": summary[4],
+                "orders": summary[5],
+                "items_sold": summary[6],
+                "roas": summary[7],
+            }
+    overview = page.get("overview")
+    return overview if isinstance(overview, dict) else None
+
+
 def parse_shopee_campaign_summary(
     summary: dict[str, object],
     *,
@@ -247,8 +300,8 @@ class ZiniaoCollector:
         all_metrics: list[DailyAdMetric] = []
 
         # 1. 解析概览 KPI（仅第一页，各页相同）
-        overview = first_page.get("overview")
-        if isinstance(overview, dict):
+        overview = _shopee_overview(first_page)
+        if overview is not None:
             all_metrics.append(
                 parse_shopee_overview(
                     overview,
@@ -259,7 +312,7 @@ class ZiniaoCollector:
             )
 
         # 2. 解析第一页明细行
-        rows = first_page.get("rows", [])
+        rows = _shopee_detail_rows(first_page)
         if rows:
             all_metrics.extend(
                 parse_shopee_product_rows(
@@ -290,14 +343,16 @@ class ZiniaoCollector:
                 page_data = self.cli_client.page_exec(
                     store_id, SHOPEE_DETAIL_PAGE_SCRIPT
                 )
-                if isinstance(page_data, dict) and page_data.get("rows"):
+                if isinstance(page_data, dict) and _shopee_detail_rows(
+                    page_data
+                ):
                     break
                 self.cli_client.sleeper(1)
 
             if not isinstance(page_data, dict):
                 break
 
-            page_rows = page_data.get("rows", [])
+            page_rows = _shopee_detail_rows(page_data)
             has_next = bool(page_data.get("hasNext", False))
             current_page = page_data.get("page", 0) or (current_page + 1)
 
@@ -411,41 +466,38 @@ JSON.stringify((()=>{
   };
   const hasOverview=Object.values(overview).every(value=>value!==null);
 
-  // 2. 提取表格行
-  const rows=Array.from(document.querySelectorAll("table tbody tr"));
-  const detailRows=rows.map(row=>{
-    const cells=Array.from(row.querySelectorAll("td")).map(cell=>
-      (cell.innerText||cell.textContent||"").trim().replace(/\s+/g," ")
-    );
-    const text=cells.join(" ");
-    const campaignMatch=text.match(/(?:Campaign|แคมเปญ)\s*[:：]?\s*([^\n]+?)(?:\s*ID\s*[:：]\s*(\d+))?/i);
-    const productMatch=text.match(/(?:Product|สินค้า)\s*[:：]?\s*([^\n]+?)(?:\s*ID\s*[:：]\s*(\d+))?/i);
-    // metrics: spend, gmv, orders from cells
-    const money=cells.filter(c=>/[฿$¥]|(?:THB|USD|CNY)/i.test(c));
-    const orders=cells.find(c=>/^\d+$/.test(c.replace(/,/g,"")));
-    if(!campaignMatch) return null;
-    return {
-      campaign:campaignMatch[1]||cells[0]||"",
-      campaign_id:campaignMatch[2]||"",
-      product:productMatch?productMatch[1]||"":"",
-      product_id:productMatch?productMatch[2]||"":"",
-      spend:money[0]||"0",
-      gmv:money[1]||"0",
-      orders:orders||"0",
-      currency:/USD/i.test(text)?"USD":(/CNY|¥/.test(text)?"CNY":"THB")
-    };
-  }).filter(Boolean);
+  // 2. Shopee renders product identities and metrics in separate aligned
+  // tables. Return both raw row arrays and pair them in tested Python code.
+  const bodyTables=Array.from(document.querySelectorAll("table.eds-table__body"));
+  const productTable=bodyTables.find(table=>
+    /\bID:\s*\d+/.test(table.innerText||"")
+  );
+  const metricTable=bodyTables.find(table=>{
+    const text=table.innerText||"";
+    const firstRow=table.querySelector("tbody tr");
+    return /[฿$¥]|(?:THB|USD|CNY)/i.test(text)
+      && !!firstRow && firstRow.querySelectorAll("td").length>=6;
+  });
+  const productRows=productTable?Array.from(
+    productTable.querySelectorAll("tbody tr")
+  ).map(row=>(row.innerText||row.textContent||"").trim()):[];
+  const metricRows=metricTable?Array.from(
+    metricTable.querySelectorAll("tbody tr")
+  ).map(row=>Array.from(row.querySelectorAll("td")).map(cell=>
+    (cell.innerText||cell.textContent||"").trim().replace(/\s+/g," ")
+  )):[];
 
   // 3. 分页信息
   const pager=document.querySelector(".eds-pager");
-  const currentPage=pager?parseInt(pager.querySelector(".eds-pager__button--active")?.textContent||"1"):1;
+  const currentPage=pager?parseInt(pager.querySelector(".eds-pager__current")?.textContent||"1"):1;
   const totalPages=pager?parseInt(pager.querySelector(".eds-pager__total")?.textContent||"1"):1;
   const nextButton=document.querySelector(".eds-pager__button-next");
   const hasNext=nextButton?!nextButton.disabled:false;
 
   return {
     overview:hasOverview?overview:null,
-    rows:detailRows,
+    productRows:productRows,
+    metricRows:metricRows,
     page:currentPage,
     totalPages:totalPages,
     hasNext:hasNext

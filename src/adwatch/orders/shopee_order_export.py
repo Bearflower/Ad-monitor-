@@ -38,7 +38,7 @@ def _stable_id(prefix: str, value: str) -> str:
 
 def _decimal(value: object) -> Decimal:
     if value in (None, ""):
-        return Decimal("0")
+        return Decimal(0)
     return Decimal(str(value).replace(",", ""))
 
 
@@ -63,7 +63,7 @@ def parse_order_export(
         )
 
     grouped: dict[tuple[str, str], dict[str, object]] = defaultdict(
-        lambda: {"quantity": 0, "buyer_paid": Decimal("0")}
+        lambda: {"quantity": 0, "buyer_paid": Decimal(0)}
     )
     rejected: list[str] = []
     for row_number, values in enumerate(

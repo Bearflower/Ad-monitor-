@@ -315,6 +315,46 @@ class DashboardRouter:
                     reason=form["reason"],
                 )
                 return RouteResponse(303, location="/ad-funds")
+            if path == "/strategy-rules/create" and self.strategy_rule:
+                import json
+
+                self.strategy_rule.create_version(
+                    parameters=json.loads(form["parameters"]),
+                    effective_from=date.fromisoformat(
+                        form["effective_from"]
+                    ),
+                    actor=form["actor"],
+                )
+                return RouteResponse(303, location="/strategy-rules")
+            if path == "/strategy-rules/close" and self.strategy_rule:
+                self.strategy_rule.close_version(form["version_id"])
+                return RouteResponse(303, location="/strategy-rules")
+            if path == "/strategy-rules/shadow" and self.strategy_rule:
+                import json as json_lib
+                import urllib.parse
+
+                parameters = json_lib.loads(form.get("parameters", "{}"))
+                shadow_results = self.strategy_rule.run_shadow(parameters)
+                encoded = urllib.parse.quote(
+                    json_lib.dumps(shadow_results, default=str)
+                )
+                return RouteResponse(
+                    303, location=f"/strategy-rules?shadow_results={encoded}"
+                )
+            if path == "/approvals/create" and self.approval:
+                self.approval.create(
+                    recommendation_id=int(form["recommendation_id"]),
+                )
+                return RouteResponse(303, location="/approvals")
+            if path == "/approvals/decide" and self.approval:
+                self.approval.decide(
+                    approval_id=form["approval_id"],
+                    token=form["token"],
+                    approve=form["decision"] == "approve",
+                    actor=form["actor"],
+                    reason=form.get("reason", ""),
+                )
+                return RouteResponse(303, location="/approvals")
             occurred_on = date.fromisoformat(form["occurred_on"])
             if path == "/adjustments":
                 self.ledger.create_adjustment(
@@ -374,46 +414,6 @@ class DashboardRouter:
                     actor="local-web",
                 )
                 return RouteResponse(303, location="/ad-funds")
-            if path == "/strategy-rules/create" and self.strategy_rule:
-                import json
-
-                self.strategy_rule.create_version(
-                    parameters=json.loads(form["parameters"]),
-                    effective_from=date.fromisoformat(
-                        form["effective_from"]
-                    ),
-                    actor=form["actor"],
-                )
-                return RouteResponse(303, location="/strategy-rules")
-            if path == "/strategy-rules/close" and self.strategy_rule:
-                self.strategy_rule.close_version(form["version_id"])
-                return RouteResponse(303, location="/strategy-rules")
-            if path == "/strategy-rules/shadow" and self.strategy_rule:
-                import json as json_lib
-                import urllib.parse
-
-                parameters = json_lib.loads(form.get("parameters", "{}"))
-                shadow_results = self.strategy_rule.run_shadow(parameters)
-                encoded = urllib.parse.quote(
-                    json_lib.dumps(shadow_results, default=str)
-                )
-                return RouteResponse(
-                    303, location=f"/strategy-rules?shadow_results={encoded}"
-                )
-            if path == "/approvals/create" and self.approval:
-                self.approval.create(
-                    recommendation_id=int(form["recommendation_id"]),
-                )
-                return RouteResponse(303, location="/approvals")
-            if path == "/approvals/decide" and self.approval:
-                self.approval.decide(
-                    approval_id=form["approval_id"],
-                    token=form["token"],
-                    approve=form["decision"] == "approve",
-                    actor=form["actor"],
-                    reason=form.get("reason", ""),
-                )
-                return RouteResponse(303, location="/approvals")
             if path != "/expenses":
                 return RouteResponse(404, message="unknown route")
             draft = ExpenseDraft(

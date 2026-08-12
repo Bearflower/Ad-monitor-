@@ -21,6 +21,16 @@ def test_sku_upsert_is_idempotent_and_keeps_latest_inventory(tmp_path):
 
     repository.upsert_skus((first,))
     repository.upsert_skus((latest,))
+    repository.upsert_orders(
+        (
+            PlatformOrderLine(
+                "shopee", "虾皮泰国", "ORDER-1", "item", "model",
+                "seller-sku", "1 bag", "Foot soak", 1, Decimal(100),
+                "THB", "completed", "delivered", "", date(2026, 7, 29),
+                latest.observed_at,
+            ),
+        )
+    )
 
     pending = repository.pending_sku_costs()
     assert len(pending) == 1
@@ -51,6 +61,30 @@ def test_sku_map_is_isolated_by_platform_and_store(tmp_path):
     assert mapping == {
         ("item", "model"): ("SKU-A", "A", "Product A")
     }
+
+
+def test_sku_map_keeps_raw_seller_sku_when_platform_reuses_it(tmp_path):
+    database = Database(tmp_path / "raw-seller-map.sqlite3")
+    database.migrate()
+    repository = OrderRepository(database)
+    observed = datetime(2026, 8, 10, 9, tzinfo=UTC)
+    repository.upsert_skus(
+        (
+            PlatformSku(
+                "shopee", "shop", "item-50", "model-50", "Chief",
+                "Chief 50ml", "Roll On", 1, observed,
+            ),
+            PlatformSku(
+                "shopee", "shop", "item-250", "model-250", "Chief",
+                "Chief 250ml", "Body Spray", 1, observed,
+            ),
+        )
+    )
+
+    mapping = repository.sku_map(platform="shopee", store="shop")
+
+    assert mapping[("item-50", "model-50")][0] == "Chief"
+    assert mapping[("item-250", "model-250")][0] == "Chief"
 
 
 def test_pending_sku_costs_excludes_skus_used_only_by_cancelled_orders(tmp_path):
@@ -128,6 +162,52 @@ def test_pending_sku_costs_excludes_skus_used_only_by_cancelled_orders(tmp_path)
     pending = repository.pending_sku_costs()
 
     assert [row["seller_sku"] for row in pending] == ["ACTIVE-SKU"]
+
+
+def test_pending_costs_reuses_raw_cost_for_same_product_across_legacy_ids(
+    tmp_path,
+):
+    database = Database(tmp_path / "legacy-product-cost.sqlite3")
+    database.migrate()
+    repository = OrderRepository(database)
+    observed = datetime(2026, 8, 10, 9, tzinfo=UTC)
+    with database.transaction() as connection:
+        connection.execute(
+            """
+            INSERT INTO store_aliases(platform, source_store, canonical_store)
+            VALUES ('shopee', 'legacy-shop', 'shop')
+            """
+        )
+    repository.upsert_skus(
+        (
+            PlatformSku(
+                "shopee", "legacy-shop", "old-item", "old-model", "SKU",
+                "1 bag", "Same product", 0, observed,
+            ),
+            PlatformSku(
+                "shopee", "shop", "new-item", "new-model", "SKU",
+                "1 bag", "Same product", 1, observed,
+            ),
+        )
+    )
+    repository.upsert_orders(
+        (
+            PlatformOrderLine(
+                "shopee", "shop", "ORDER", "new-item", "new-model", "SKU",
+                "1 bag", "Same product", 1, Decimal(100), "THB", "completed",
+                "delivered", "", date(2026, 8, 10), observed,
+            ),
+        )
+    )
+    repository.set_sku_cost(
+        platform="shopee",
+        store="legacy-shop",
+        seller_sku="SKU",
+        effective_date=date(2026, 7, 1),
+        unit_cost_cny=Decimal(5),
+    )
+
+    assert repository.pending_sku_costs() == []
 
 
 def test_missing_costs_require_version_effective_on_order_date(tmp_path):

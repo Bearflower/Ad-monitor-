@@ -51,6 +51,8 @@ class Settings:
     knowledge_enrichment: bool = True
     knowledge_max_pages_per_run: int = 50
     knowledge_request_delay_ms: int = 1500
+    publish_ssh_target: str = ""
+    publish_container: str = "adwatch"
 
     @classmethod
     def from_env(cls) -> Settings:
@@ -146,6 +148,8 @@ class Settings:
             knowledge_request_delay_ms=positive_int(
                 "ADWATCH_KNOWLEDGE_REQUEST_DELAY_MS", "1500"
             ),
+            publish_ssh_target=value("ADWATCH_PUBLISH_SSH_TARGET"),
+            publish_container=value("ADWATCH_PUBLISH_CONTAINER", "adwatch"),
         )
 
     @property

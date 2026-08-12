@@ -5,6 +5,8 @@ services:
     build: .
     image: adwatch:latest
     container_name: adwatch
+    env_file:
+      - .env
     ports:
       # 只监听 127.0.0.1，通过 nginx 反向代理对外暴露
       - "127.0.0.1:8768:8768"

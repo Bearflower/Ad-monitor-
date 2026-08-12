@@ -155,6 +155,146 @@ def test_order_cost_gaps_are_reported_separately_from_sku_price_gaps(tmp_path):
     )
 
 
+def test_frozen_order_cost_snapshot_closes_sku_price_gap(tmp_path):
+    database = Database(tmp_path / "snapshot-closes-price-gap.sqlite3")
+    database.migrate()
+    observed = datetime(2026, 8, 3, 9, tzinfo=UTC)
+    OrderRepository(database).upsert_orders(
+        (
+            PlatformOrderLine(
+                "shopee", "shop", "ORDER-FROZEN", "item", "model",
+                "SKU-FROZEN", "", "Frozen cost product", 2, Decimal(100),
+                "THB", "completed", "delivered", "", date(2026, 8, 1),
+                observed,
+            ),
+        )
+    )
+    InventoryService(database).record_order_cost(
+        platform="shopee",
+        store="shop",
+        order_id="ORDER-FROZEN",
+        seller_sku="SKU-FROZEN",
+        quantity=2,
+        unit_cost_cny=Decimal(5),
+        cost_effective_date=date(2026, 7, 1),
+    )
+
+    service = InventoryService(database)
+    assert service.list_missing_sku_costs() == ()
+    assert service.list_order_cost_gaps() == ()
+
+
+def test_distinct_business_identity_snapshot_closes_only_its_price_gap(tmp_path):
+    database = Database(tmp_path / "identity-snapshot-gap.sqlite3")
+    database.migrate()
+    observed = datetime(2026, 8, 10, 9, tzinfo=UTC)
+    repository = OrderRepository(database)
+    repository.upsert_skus(
+        (
+            PlatformSku(
+                "shopee", "shop", "item-50", "model-50", "Chief",
+                "Chief 50ml", "Roll On", 1, observed,
+            ),
+            PlatformSku(
+                "shopee", "shop", "item-250", "model-250", "Chief",
+                "Chief 250ml", "Body Spray", 1, observed,
+            ),
+        )
+    )
+    repository.upsert_orders(
+        (
+            PlatformOrderLine(
+                "shopee", "shop", "ORDER-50", "item-50", "model-50",
+                "Chief", "Chief 50ml", "Roll On", 1, Decimal(100), "THB",
+                "completed", "delivered", "", date(2026, 8, 10), observed,
+            ),
+        )
+    )
+    InventoryService(database).record_order_cost(
+        platform="shopee",
+        store="shop",
+        order_id="ORDER-50",
+        seller_sku="Chief [item-50:model-50]",
+        quantity=1,
+        unit_cost_cny=Decimal(5),
+        cost_effective_date=date(2026, 8, 1),
+    )
+
+    service = InventoryService(database)
+    assert service.list_missing_sku_costs() == ()
+    assert service.list_order_cost_gaps() == ()
+
+
+def test_legacy_snapshot_is_not_rekeyed_when_order_has_two_business_identities(
+    tmp_path,
+):
+    database = Database(tmp_path / "ambiguous-legacy-snapshot.sqlite3")
+    database.migrate()
+    observed = datetime(2026, 8, 10, 9, tzinfo=UTC)
+    repository = OrderRepository(database)
+    repository.upsert_skus(
+        (
+            PlatformSku(
+                "shopee", "shop", "item-50", "model-50", "Chief",
+                "Chief 50ml", "Roll On", 1, observed,
+            ),
+            PlatformSku(
+                "shopee", "shop", "item-250", "model-250", "Chief",
+                "Chief 250ml", "Body Spray", 1, observed,
+            ),
+        )
+    )
+    first = PlatformOrderLine(
+        "shopee", "shop", "ORDER-TWO", "item-50", "model-50", "Chief",
+        "Chief 50ml", "Roll On", 1, Decimal(100), "THB", "completed",
+        "delivered", "", date(2026, 8, 10), observed,
+    )
+    repository.upsert_orders(
+        (
+            first,
+            replace(
+                first,
+                item_id="item-250",
+                model_id="model-250",
+                variation_name="Chief 250ml",
+                product_name="Body Spray",
+            ),
+        )
+    )
+    with database.transaction() as connection:
+        connection.execute(
+            """
+            INSERT INTO order_cost_snapshots VALUES(
+              'shopee','shop','ORDER-TWO','Chief',1,'5','5',
+              '2026-08-01','confirmed','2026-08-10T00:00:00Z')
+            """
+        )
+
+    changed = InventoryService(database).record_order_cost(
+        platform="shopee",
+        store="shop",
+        order_id="ORDER-TWO",
+        seller_sku="Chief [item-50:model-50]",
+        legacy_seller_sku="Chief",
+        quantity=1,
+        unit_cost_cny=Decimal(5),
+        cost_effective_date=date(2026, 8, 1),
+    )
+
+    assert changed is False
+    with database.connect() as connection:
+        keys = {
+            row[0]
+            for row in connection.execute(
+                """
+                SELECT seller_sku FROM order_cost_snapshots
+                WHERE order_id='ORDER-TWO'
+                """
+            )
+        }
+    assert keys == {"Chief"}
+
+
 def test_order_cost_gap_resolves_store_alias_and_quantity_coverage(tmp_path):
     database = Database(tmp_path / "order-cost-alias-quantity.sqlite3")
     database.migrate()
@@ -217,6 +357,46 @@ def test_order_cost_gap_ignores_legacy_placeholder_when_resolved_line_exists(
         quantity=1,
         unit_cost_cny=Decimal(3),
         cost_effective_date=date(2026, 8, 1),
+    )
+
+    assert InventoryService(database).list_order_cost_gaps() == ()
+
+
+def test_returned_snapshot_is_not_reported_when_alias_feed_omits_refund(tmp_path):
+    database = Database(tmp_path / "sticky-return-gap.sqlite3")
+    database.migrate()
+    observed = datetime(2026, 8, 10, 9, tzinfo=UTC)
+    with database.transaction() as connection:
+        connection.execute(
+            """
+            INSERT INTO store_aliases(platform, source_store, canonical_store)
+            VALUES ('shopee', 'legacy-shop', 'shop')
+            """
+        )
+    base = PlatformOrderLine(
+        "shopee", "legacy-shop", "RETURNED-ORDER", "legacy-item",
+        "legacy-model", "SKU-RETURNED", "", "Returned product", 1,
+        Decimal(100), "THB", "completed", "delivered", "returned",
+        date(2026, 7, 22), observed,
+    )
+    current = replace(
+        base,
+        store="shop",
+        item_id="current-item",
+        model_id="current-model",
+        refund_status="",
+        source_updated_at=datetime(2026, 8, 11, 9, tzinfo=UTC),
+    )
+    OrderRepository(database).upsert_orders((base, current))
+    InventoryService(database).record_order_cost(
+        platform="shopee",
+        store="legacy-shop",
+        order_id="RETURNED-ORDER",
+        seller_sku="SKU-RETURNED",
+        quantity=1,
+        unit_cost_cny=Decimal(3),
+        cost_effective_date=date(2026, 7, 1),
+        status="returned",
     )
 
     assert InventoryService(database).list_order_cost_gaps() == ()

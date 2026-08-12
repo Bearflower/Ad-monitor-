@@ -172,6 +172,7 @@ class InventoryService:
         unit_cost_cny: Decimal,
         cost_effective_date: date,
         status: str = "confirmed",
+        legacy_seller_sku: str | None = None,
     ) -> bool:
         if quantity <= 0 or unit_cost_cny <= 0:
             raise InventoryError("order cost inputs must be positive")
@@ -193,6 +194,47 @@ class InventoryService:
                 """,
                 (platform, *stores, order_id, seller_sku),
             ).fetchall()
+            if not existing and legacy_seller_sku not in {None, seller_sku}:
+                legacy = connection.execute(
+                    f"""
+                    SELECT store, quantity, unit_cost_cny,
+                           cost_effective_date, status
+                    FROM order_cost_snapshots
+                    WHERE platform=? AND store IN ({placeholders})
+                      AND order_id=? AND seller_sku=?
+                    ORDER BY created_at DESC, store
+                    """,
+                    (platform, *stores, order_id, legacy_seller_sku),
+                ).fetchall()
+                if len(legacy) == 1:
+                    identity_count = connection.execute(
+                        """
+                        SELECT COUNT(DISTINCT sku_identity)
+                        FROM effective_order_sku_lines
+                        WHERE platform=? AND canonical_store=?
+                          AND order_id=? AND raw_seller_sku=?
+                          AND resolution_status='ready'
+                        """,
+                        (platform, store, order_id, legacy_seller_sku),
+                    ).fetchone()[0]
+                    if int(identity_count or 0) != 1:
+                        return False
+                    connection.execute(
+                        """
+                        UPDATE order_cost_snapshots
+                        SET seller_sku=?
+                        WHERE platform=? AND store=? AND order_id=?
+                          AND seller_sku=?
+                        """,
+                        (
+                            seller_sku,
+                            platform,
+                            legacy[0]["store"],
+                            order_id,
+                            legacy_seller_sku,
+                        ),
+                    )
+                    existing = legacy
             if existing:
                 if len(existing) != 1:
                     return False
@@ -699,14 +741,14 @@ class InventoryService:
             rows = connection.execute(
                 """
                 SELECT
-                    pol.seller_sku,
+                    pol.sku_identity AS seller_sku,
                     pol.platform,
                     pol.store,
                     COUNT(DISTINCT pol.order_id) AS order_count,
                     MIN(substr(pol.ordered_at, 1, 10)) AS first_missing_date,
                     MAX(substr(pol.ordered_at, 1, 10)) AS last_order_date,
                     SUM(pol.quantity) AS missing_units
-                FROM effective_platform_order_lines AS pol
+                FROM effective_order_sku_lines AS pol
                 WHERE pol.resolution_status = 'ready'
                   AND LOWER(TRIM(COALESCE(pol.order_status, '')))
                       NOT IN ('cancelled', 'canceled')
@@ -714,7 +756,7 @@ class InventoryService:
                       SELECT 1
                       FROM sku_cost_history AS sch
                       WHERE sch.platform = pol.platform
-                        AND sch.seller_sku = pol.seller_sku
+                        AND sch.seller_sku = pol.sku_identity
                         AND sch.effective_date <= substr(pol.ordered_at, 1, 10)
                         AND (
                             sch.store = pol.store
@@ -735,7 +777,23 @@ class InventoryService:
                             )
                         )
                   )
-                GROUP BY pol.seller_sku, pol.platform, pol.store
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM order_cost_snapshots AS snapshot
+                      LEFT JOIN store_aliases AS snapshot_alias
+                        ON snapshot_alias.platform=snapshot.platform
+                       AND snapshot_alias.source_store=snapshot.store
+                      WHERE snapshot.platform=pol.platform
+                        AND COALESCE(
+                            snapshot_alias.canonical_store,
+                            snapshot.store
+                        )=pol.canonical_store
+                        AND snapshot.order_id=pol.order_id
+                        AND snapshot.seller_sku=pol.sku_identity
+                        AND snapshot.status IN ('confirmed', 'returned')
+                        AND snapshot.quantity>=pol.quantity
+                  )
+                GROUP BY pol.sku_identity, pol.platform, pol.store
                 ORDER BY order_count DESC
                 """
             ).fetchall()
@@ -830,14 +888,14 @@ class InventoryService:
                     pol.platform,
                     pol.store,
                     pol.order_id,
-                    pol.seller_sku,
+                    pol.sku_identity AS seller_sku,
                     SUM(pol.quantity) - COALESCE(
                         (
                             SELECT SUM(ocs.quantity)
                             FROM order_cost_snapshots AS ocs
                             WHERE ocs.platform = pol.platform
                               AND ocs.order_id = pol.order_id
-                              AND ocs.seller_sku = pol.seller_sku
+                              AND ocs.seller_sku = pol.sku_identity
                               AND ocs.status = 'confirmed'
                               AND (
                                   ocs.store = pol.store
@@ -860,7 +918,7 @@ class InventoryService:
                         ),
                         0
                     ) AS missing_units
-                FROM effective_platform_order_lines AS pol
+                FROM effective_order_sku_lines AS pol
                 WHERE pol.resolution_status = 'ready'
                   AND LOWER(TRIM(COALESCE(pol.order_status, '')))
                           NOT IN ('cancelled', 'canceled', 'returned',
@@ -869,16 +927,34 @@ class InventoryService:
                   AND LOWER(TRIM(COALESCE(pol.refund_status, '')))
                           NOT IN ('returned', 'refund_completed', 'refunded',
                                   'return_completed')
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM platform_order_lines AS historical
+                      LEFT JOIN store_aliases AS historical_alias
+                        ON historical_alias.platform=historical.platform
+                       AND historical_alias.source_store=historical.store
+                      WHERE historical.platform=pol.platform
+                        AND COALESCE(
+                            historical_alias.canonical_store,
+                            historical.store
+                        )=pol.canonical_store
+                        AND historical.order_id=pol.order_id
+                        AND historical.seller_sku=pol.raw_seller_sku
+                        AND LOWER(TRIM(COALESCE(
+                            historical.refund_status, ''
+                        ))) IN ('returned', 'refund_completed', 'refunded',
+                                'return_completed')
+                  )
                 GROUP BY
                     substr(pol.ordered_at, 1, 10), pol.platform, pol.store,
-                    pol.order_id, pol.seller_sku
+                    pol.order_id, pol.sku_identity
                 HAVING SUM(pol.quantity) > COALESCE(
                     (
                         SELECT SUM(ocs.quantity)
                         FROM order_cost_snapshots AS ocs
                         WHERE ocs.platform = pol.platform
                           AND ocs.order_id = pol.order_id
-                          AND ocs.seller_sku = pol.seller_sku
+                          AND ocs.seller_sku = pol.sku_identity
                           AND ocs.status = 'confirmed'
                           AND (
                               ocs.store = pol.store
