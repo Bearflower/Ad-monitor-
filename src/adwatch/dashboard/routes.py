@@ -91,6 +91,20 @@ class DashboardRouter:
         if form.get("csrf_token") != self.csrf_token:
             return RouteResponse(403, message="invalid CSRF token")
         try:
+            if path == "/monthly-exchange-rates":
+                if self.database is None:
+                    raise ValueError("database is required")
+                AccountingExchangeRateService(
+                    self.database
+                ).set_monthly_override(
+                    currency=form["currency"],
+                    year_month=form["year_month"],
+                    rate_to_cny=Decimal(form["rate_to_cny"]),
+                    source=form["source"],
+                    note=form.get("note", ""),
+                    actor="local-web",
+                )
+                return RouteResponse(303, location="/operations")
             if path == "/fulfillment" and self.fulfillment:
                 self.fulfillment.set_policy(
                     platform=form["platform"],

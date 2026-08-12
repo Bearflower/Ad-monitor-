@@ -61,6 +61,22 @@ def test_operating_statement_page_renders_twelve_months(tmp_path):
     assert "年度合计" in page
 
 
+def test_operations_forms_expose_multicurrency_fields(tmp_path):
+    database = Database(tmp_path / "operations.sqlite3")
+    database.migrate()
+    page = render_operations_page("secret", database, date(2026, 8, 12))
+    for field in (
+        "year_month",
+        "rate_to_cny",
+        "goods_cost_original",
+        "service_fee_original",
+        "entry_name",
+        "credited_amount_original",
+        "currency",
+    ):
+        assert f'name="{field}"' in page
+
+
 def test_optimization_center_explains_roas_evidence_and_execution_state():
     page = render_optimization_center(
         platform_roas="4.20",

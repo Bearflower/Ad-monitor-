@@ -3,7 +3,7 @@ from decimal import Decimal
 from urllib.parse import parse_qs, urlparse
 
 from adwatch.accounting.exchange_rates import AccountingExchangeRateService
-from adwatch.dashboard.routes import DashboardRouter
+from adwatch.dashboard.routes import DashboardRouter, RouteResponse
 from adwatch.inventory.service import InventoryService
 from adwatch.ledger.service import LedgerService
 from adwatch.orders.fulfillment import FulfillmentService
@@ -198,6 +198,32 @@ def test_manual_income_route_resolves_monthly_rate(tmp_path):
             "SELECT amount_cny, rate_source FROM manual_income_entries"
         ).fetchone()
     assert tuple(row) == ("560.00", "monthly_override")
+
+
+def test_monthly_exchange_rate_route_persists_override(tmp_path):
+    database = Database(tmp_path / "web.sqlite3")
+    database.migrate()
+    router = DashboardRouter(
+        LedgerService(database), csrf_token="secret", database=database
+    )
+    response = router.post(
+        "/monthly-exchange-rates",
+        {
+            "csrf_token": "secret",
+            "currency": "THB",
+            "year_month": "2026-08",
+            "rate_to_cny": "0.2034",
+            "source": "manual",
+            "note": "月结",
+        },
+    )
+    assert response == RouteResponse(303, location="/operations")
+    with database.connect() as connection:
+        row = connection.execute(
+            "SELECT currency, year_month, rate_to_cny "
+            "FROM monthly_exchange_rate_overrides"
+        ).fetchone()
+    assert tuple(row) == ("THB", "2026-08", "0.2034")
 
 
 def test_inventory_sku_cost_and_profit_routes_are_writable(tmp_path):

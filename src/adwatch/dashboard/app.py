@@ -1281,7 +1281,9 @@ def serve(
                 ).encode("utf-8")
                 content_type = "text/html; charset=utf-8"
             elif parsed.path == "/operations":
-                body = render_operations_page(csrf_token).encode("utf-8")
+                body = render_operations_page(
+                    csrf_token, database, data_date
+                ).encode("utf-8")
                 content_type = "text/html; charset=utf-8"
             elif parsed.path == "/operating-statement":
                 raw_year = query.get("year", [str(data_date.year)])[0]

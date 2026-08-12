@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import html
 import json
-from datetime import date
+from datetime import UTC, date, datetime
 from decimal import Decimal, InvalidOperation
 
 from adwatch.accounting.operating_statement import OperatingStatementService
@@ -846,6 +846,22 @@ def render_operations_forms(csrf_token: str) -> str:
 
     <!-- 合伙人出资与提款 -->
     <section class="form-section">
+      <div class="form-section-title">人工收入</div>
+      <form method="post" action="/manual-income" class="embedded-form">
+        <input type="hidden" name="csrf_token" value="{token}">
+        <div class="form-grid">
+          <div class="form-field"><label>日期</label><input type="date" name="occurred_on" required></div>
+          <div class="form-field"><label>平台</label><input name="platform"></div>
+          <div class="form-field"><label>店铺</label><input name="store"></div>
+          <div class="form-field"><label>订单号</label><input name="order_id"></div>
+          <div class="form-field"><label>原币金额</label><input name="amount_original" required></div>
+          <div class="form-field"><label>币种</label><select name="currency"><option>THB</option><option>SGD</option><option>CNY</option></select></div>
+          <div class="form-field"><label>备注</label><input name="note"></div>
+        </div><button class="btn">登记收入</button>
+      </form>
+    </section>
+
+    <section class="form-section">
       <div class="form-section-title">合伙人出资与提款</div>
       <div class="form-section-desc">登记合伙人的资金投入和提取记录</div>
       <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(280px,1fr)); gap:var(--space-md);">
@@ -869,8 +885,13 @@ def render_operations_forms(csrf_token: str) -> str:
               </select>
             </div>
             <div class="form-field">
-              <label>金额 (CNY)</label>
-              <input name="amount" placeholder="人民币金额" required>
+              <label>投入名称</label><input name="entry_name">
+            </div>
+            <div class="form-field">
+              <label>原币金额</label><input name="amount_original" required>
+            </div>
+            <div class="form-field">
+              <label>币种</label><select name="currency"><option>CNY</option><option>THB</option><option>SGD</option></select>
             </div>
           </div>
           <div class="form-actions">
@@ -890,8 +911,15 @@ def render_operations_forms(csrf_token: str) -> str:
               <input name="partner" placeholder="提款人姓名" required>
             </div>
             <div class="form-field">
-              <label>金额 (CNY)</label>
-              <input name="amount" placeholder="人民币金额" required>
+              <label>支付原币金额</label>
+              <input name="paid_amount_original" required>
+            </div>
+            <div class="form-field">
+              <label>实际到账原币金额</label>
+              <input name="credited_amount_original" required>
+            </div>
+            <div class="form-field">
+              <label>币种</label><select name="currency"><option>THB</option><option>SGD</option><option>CNY</option></select>
             </div>
             <div class="form-field">
               <label>用途</label>
@@ -973,11 +1001,14 @@ def render_operations_forms(csrf_token: str) -> str:
             </div>
             <div class="form-field">
               <label>货款</label>
-              <input name="goods_cost" placeholder="货款金额" required>
+              <input name="goods_cost_original" placeholder="原币货款" required>
             </div>
             <div class="form-field">
               <label>服务费</label>
-              <input name="service_fee" placeholder="服务费金额" required>
+              <input name="service_fee_original" placeholder="原币服务费" required>
+            </div>
+            <div class="form-field">
+              <label>币种</label><select name="currency"><option>CNY</option><option>THB</option><option>SGD</option></select>
             </div>
           </div>
           <div class="form-actions">
@@ -1197,13 +1228,47 @@ def render_operations_forms(csrf_token: str) -> str:
     """
 
 
-def render_operations_page(csrf_token: str) -> str:
+def render_operations_page(
+    csrf_token: str,
+    database: Database | None = None,
+    data_date: date | None = None,
+) -> str:
     """渲染记账对账页面。"""
+    selected_date = data_date or datetime.now(UTC).date()
+    rate_rows = ()
+    if database is not None:
+        from adwatch.accounting.exchange_rates import (
+            AccountingExchangeRateService,
+        )
+
+        rate_rows = AccountingExchangeRateService(database).list_monthly_rates(
+            selected_date.year
+        )
+    rate_table = "".join(
+        f"<tr><td>{html.escape(item['year_month'])}</td>"
+        f"<td>{html.escape(item['currency'])} → CNY</td>"
+        f"<td>{html.escape(item['rate_to_cny'])}</td>"
+        f"<td>{html.escape(item['source'])}</td></tr>"
+        for item in rate_rows
+    ) or '<tr><td colspan="4">暂无月度汇率覆盖</td></tr>'
     body = f"""
     <div class="module-hero">
       <h1>记账对账</h1>
       <p>一站式管理费用录入、合伙人资金、广告成本、SKU成本和分润协议</p>
     </div>
+    <section class="panel"><div class="panel-header"><h2>月度汇率</h2></div>
+      <form method="post" action="/monthly-exchange-rates" class="embedded-form">
+        <input type="hidden" name="csrf_token" value="{html.escape(csrf_token, quote=True)}">
+        <div class="form-grid">
+          <div class="form-field"><label>月份</label><input name="year_month" value="{selected_date:%Y-%m}" required></div>
+          <div class="form-field"><label>币种</label><select name="currency"><option>THB</option><option>SGD</option><option>CNY</option></select></div>
+          <div class="form-field"><label>兑人民币汇率</label><input name="rate_to_cny" required></div>
+          <div class="form-field"><label>来源</label><input name="source" value="manual" required></div>
+          <div class="form-field"><label>备注</label><input name="note"></div>
+        </div><button class="btn">保存月度汇率</button>
+      </form>
+      <div class="table-wrap"><table><thead><tr><th>月份</th><th>币种</th><th>汇率</th><th>来源</th></tr></thead><tbody>{rate_table}</tbody></table></div>
+    </section>
     {render_operations_forms(csrf_token)}
     """
     return _page_shell(
