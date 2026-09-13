@@ -1,0 +1,55 @@
+{
+  "contract_version": 1,
+  "fixture_kind": "real_observation",
+  "captured_at": "2026-09-09T00:00:00+00:00",
+  "source": "ziniao-cli/page-exec/read-only",
+  "store_id": "redacted-shopee-store",
+  "page": {
+    "path": "/portal/marketing/pas/index",
+    "title": "Shopee Seller Centre",
+    "date_filter": "09/09 - 10/09 (GMT+7)",
+    "ad_type_filter": "Product Ads",
+    "status_filter": "All"
+  },
+  "columns": [
+    "Ad Info",
+    "Daily Budget",
+    "Target ROAS",
+    "Diagnosis",
+    "Expense",
+    "Sales",
+    "ROAS",
+    "Impressions",
+    "Clicks",
+    "CTR",
+    "Add to Cart",
+    "Conversions",
+    "Items Sold",
+    "Cost per Conversion",
+    "ACOS"
+  ],
+  "pagination": {
+    "page": null,
+    "total_pages": null,
+    "has_next": null,
+    "evidence": "The empty live table exposed no pager values."
+  },
+  "campaign_rows": [],
+  "missing_fields": [
+    "campaign_rows",
+    "campaign_id",
+    "campaign_name",
+    "campaign_status",
+    "daily_budget",
+    "target_roas",
+    "item_id"
+  ],
+  "stable_id_evidence": {
+    "preferred_order": [
+      "campaign_id",
+      "immutable_detail_link_id",
+      "store_id+campaign_type+item_id"
+    ],
+    "observed": "No campaign rows were present in the live, date-filtered table; no identifier is fabricated from a display name."
+  }
+}

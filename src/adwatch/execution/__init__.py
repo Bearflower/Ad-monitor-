@@ -1,1 +1,0 @@
-"""Approved advertising action execution."""

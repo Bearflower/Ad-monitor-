@@ -1,821 +1,319 @@
-from datetime import date
+from __future__ import annotations
+
+import inspect
+import sqlite3
+from datetime import UTC, date, datetime
 from decimal import Decimal
+from pathlib import Path
+
+import pytest
 
 import adwatch.cli
-from adwatch.cli import main
+from adwatch.cli import build_parser, main
 from adwatch.config import Settings
-from adwatch.operations.scheduler import ScheduleStatus
-from adwatch.orders.repository import OrderRepository
-from adwatch.storage.db import Database
-
-
-def test_cli_help_exits_successfully(capsys):
-    assert main(["--help"]) == 0
-    assert "collect" in capsys.readouterr().out
-
-
-def test_doctor_uses_official_ziniao_cli_without_legacy_credentials(
-    tmp_path, monkeypatch, capsys
-):
-    class FakeCliClient:
-        def get_store_list(self):
-            return [{"storeId": "1"}, {"storeId": "2"}]
-
-    monkeypatch.setenv("ADWATCH_DATA_DIR", str(tmp_path))
-    monkeypatch.setattr(adwatch.cli.shutil, "which", lambda _: "/bin/ziniao-cli")
-    monkeypatch.setattr(adwatch.cli, "ZiniaoCliClient", FakeCliClient)
-
-    assert main(["doctor"]) == 0
-    output = capsys.readouterr().out
-    assert "Ziniao CLI: reachable (2 stores)" in output
-
-
-def test_collect_ziniao_uses_official_cli_store_configuration(
-    tmp_path, monkeypatch, capsys
-):
-    class EmptyCollector:
-        source = "ziniao"
-
-        def __init__(self, settings, platform):
-            self.platform = platform
-
-        def collect(self, data_date):
-            return []
-
-    settings = Settings(
-        data_dir=tmp_path,
-        ziniao_tiktok_store_id="111",
-        ziniao_shopee_store_id="222",
-        tiktok_collection_enabled=True,
-    )
-    monkeypatch.setattr(adwatch.cli.Settings, "from_env", lambda: settings)
-    monkeypatch.setattr(adwatch.cli, "ZiniaoCollector", EmptyCollector)
-
-    assert main(["collect", "--mode", "ziniao", "--date", "2026-07-22"]) == 0
-    output = capsys.readouterr().out
-    assert "tiktok: received=0" in output
-    assert "shopee: received=0" in output
-
-
-def test_collect_ziniao_skips_disabled_tiktok(
-    tmp_path, monkeypatch, capsys
-):
-    collected_platforms = []
-
-    class EmptyCollector:
-        source = "ziniao"
-
-        def __init__(self, settings, platform):
-            self.platform = platform
-            collected_platforms.append(platform.value)
-
-        def collect(self, data_date):
-            return []
-
-    settings = Settings(
-        data_dir=tmp_path,
-        ziniao_shopee_store_id="222",
-        tiktok_collection_enabled=False,
-    )
-    monkeypatch.setattr(adwatch.cli.Settings, "from_env", lambda: settings)
-    monkeypatch.setattr(adwatch.cli, "ZiniaoCollector", EmptyCollector)
-
-    assert main(["collect", "--mode", "ziniao", "--date", "2026-08-01"]) == 0
-    output = capsys.readouterr().out
-    assert collected_platforms == ["shopee"]
-    assert "shopee: received=0" in output
-    assert "tiktok:" not in output
-
-
-def test_schedule_plist_uses_scheduled_wrapper_and_project_runtime(capsys):
-    assert main(["schedule", "--print-launchd"]) == 0
-
-    output = capsys.readouterr().out
-    assert "<string>run</string><string>scheduled-daily</string>" in output
-    assert "<key>WorkingDirectory</key>" in output
-    assert "/.venv/bin/adwatch</string>" in output
-    assert "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin" in output
-    assert "<key>Hour</key><integer>9</integer>" in output
-    assert "<key>RunAtLoad</key><true/>" in output
-
-
-def test_schedule_status_command_reports_stable_health(
-    tmp_path, monkeypatch, capsys
-):
-    settings = Settings(data_dir=tmp_path)
-    monkeypatch.setattr(adwatch.cli.Settings, "from_env", lambda: settings)
-
-    class FakeScheduleManager:
-        def __init__(self, **kwargs):
-            pass
-
-        def status(self):
-            return ScheduleStatus(
-                healthy=True,
-                loaded=True,
-                enabled=True,
-                project_dir=tmp_path,
-                issues=(),
-            )
-
-    monkeypatch.setattr(
-        adwatch.cli,
-        "ScheduleManager",
-        FakeScheduleManager,
-        raising=False,
-    )
-
-    assert main(["schedule", "status"]) == 0
-    assert (
-        "schedule=healthy loaded=true enabled=true"
-        in capsys.readouterr().out
-    )
-
-
-def test_schedule_install_loads_daily_and_weekly_agents(
-    tmp_path, monkeypatch, capsys
-):
-    settings = Settings(data_dir=tmp_path)
-    monkeypatch.setattr(adwatch.cli.Settings, "from_env", lambda: settings)
-    calls = []
-
-    class FakeScheduleManager:
-        def __init__(self, **kwargs):
-            pass
-
-        def install(self, **kwargs):
-            calls.append(kwargs)
-            return ScheduleStatus(
-                healthy=True,
-                loaded=True,
-                enabled=True,
-                project_dir=tmp_path,
-                issues=(),
-            )
-
-    monkeypatch.setattr(adwatch.cli, "ScheduleManager", FakeScheduleManager)
-
-    assert main(["schedule", "install"]) == 0
-    assert calls == [{"include_weekly": True}]
-    assert "schedule=installed healthy=true" in capsys.readouterr().out
-
-
-def test_scheduled_daily_cli_invokes_due_wrapper(monkeypatch, capsys):
-    calls = []
-
-    def run_wrapper(settings):
-        calls.append(settings)
-        print("scheduled_daily=ok report_date=2026-07-29")
-        return 0
-
-    monkeypatch.setattr(
-        adwatch.cli,
-        "run_scheduled_daily",
-        run_wrapper,
-        raising=False,
-    )
-
-    assert main(["run", "scheduled-daily"]) == 0
-    assert len(calls) == 1
-    assert "report_date=2026-07-29" in capsys.readouterr().out
-
-
-def test_orders_sync_cli_uses_shopee_range(tmp_path, monkeypatch, capsys):
-    settings = Settings(
-        data_dir=tmp_path,
-        ziniao_shopee_store_id="222",
-        ziniao_shopee_store_name="虾皮泰国",
-        tiktok_collection_enabled=False,
-    )
-    monkeypatch.setattr(adwatch.cli.Settings, "from_env", lambda: settings)
-    calls = []
-
-    class FakeResult:
-        status = "success"
-        order_count = 3
-        sku_count = 4
-        rejected_count = 0
-        refund_count = 1
-        logistics_count = 2
-        inventory_snapshot_count = 5
-
-    class FakeSync:
-        def __init__(self, repository, reader, *, store, timezone):
-            calls.append((repository, reader, store))
-            assert timezone == "Asia/Shanghai"
-
-        def sync(self, *, start, end):
-            calls.append((start, end))
-            return FakeResult()
-
-    monkeypatch.setattr(adwatch.cli, "ShopeeOrderSync", FakeSync, raising=False)
-    monkeypatch.setattr(
-        adwatch.cli,
-        "ZiniaoShopeeReadClient",
-        lambda client, store_id: (client, store_id),
-        raising=False,
-    )
-
-    assert main(
-        [
-            "orders", "sync", "--platform", "shopee",
-            "--from", "2026-08-01", "--to", "2026-08-03",
-        ]
-    ) == 0
-
-    assert calls[-1] == (date(2026, 8, 1), date(2026, 8, 3))
-    output = capsys.readouterr().out
-    assert "orders=3 skus=4 rejected=0" in output
-    assert "refunds=1 logistics=2 inventory_snapshots=5" in output
-
-
-def test_backup_cli_creates_verified_snapshot(tmp_path, monkeypatch, capsys):
-    settings = Settings(data_dir=tmp_path)
-    monkeypatch.setattr(adwatch.cli.Settings, "from_env", lambda: settings)
-    assert main(["init"]) == 0
-    destination = tmp_path / "backup.sqlite3"
-
-    assert main(["backup", "create", "--output", str(destination)]) == 0
-
-    assert destination.exists()
-    assert "integrity=ok" in capsys.readouterr().out
-
-
-def test_readiness_cli_reports_pending_without_enabling_live(
-    tmp_path, monkeypatch, capsys
-):
-    settings = Settings(data_dir=tmp_path)
-    monkeypatch.setattr(adwatch.cli.Settings, "from_env", lambda: settings)
-    monkeypatch.setattr(
-        adwatch.cli, "_ziniao_bridge_ready", lambda: False
-    )
-
-    assert main(["readiness"]) == 2
-    output = capsys.readouterr().out
-    assert "ziniao_bridge=pending_external" in output
-    assert "tiktok_campaign=disabled" in output
-    assert "live_writes=disabled" in output
-
-
-def test_monthly_report_cli_writes_local_file(tmp_path, monkeypatch, capsys):
-    settings = Settings(data_dir=tmp_path)
-    monkeypatch.setattr(adwatch.cli.Settings, "from_env", lambda: settings)
-    assert main(["init"]) == 0
-
-    assert main(["report", "monthly", "--month", "2026-07"]) == 0
-
-    path = tmp_path / "reports" / "monthly-2026-07.md"
-    assert path.exists()
-    assert "# 广告月报｜2026年07月" in path.read_text()
-    assert str(path) in capsys.readouterr().out
-
-
-def test_approval_server_refuses_to_start_without_secret(
-    tmp_path, monkeypatch, capsys
-):
-    settings = Settings(data_dir=tmp_path)
-    monkeypatch.setattr(adwatch.cli.Settings, "from_env", lambda: settings)
-
-    assert main(["approval", "serve"]) == 2
-    assert "FEISHU_CALLBACK_SECRET" in capsys.readouterr().out
-
-
-def test_launch_checklist_cli_writes_markdown(tmp_path, monkeypatch, capsys):
-    settings = Settings(data_dir=tmp_path)
-    monkeypatch.setattr(adwatch.cli.Settings, "from_env", lambda: settings)
-    monkeypatch.setattr(adwatch.cli, "_ziniao_bridge_ready", lambda: False)
-
-    assert main(["launch-checklist", "--format", "markdown"]) == 0
-
-    output = capsys.readouterr().out
-    assert "# Adwatch 上线待办" in output
-    assert "ziniao_bridge" in output
-    assert "live_allowlist" not in output
-    assert "platform_api_oauth" not in output
-    assert "production_publish" in output
-
-
-def test_launch_checklist_cli_excludes_disabled_tiktok_gate(
-    tmp_path, monkeypatch, capsys
-):
-    settings = Settings(
-        data_dir=tmp_path,
-        tiktok_collection_enabled=False,
-    )
-    monkeypatch.setattr(adwatch.cli.Settings, "from_env", lambda: settings)
-    monkeypatch.setattr(adwatch.cli, "_ziniao_bridge_ready", lambda: False)
-
-    assert main(["launch-checklist", "--format", "markdown"]) == 0
-
-    output = capsys.readouterr().out
-    assert "tiktok_campaign_validation" not in output
-    assert "shopee_campaign_validation" in output
-
-
-def test_reconciliation_csv_import_and_report(tmp_path, monkeypatch, capsys):
-    settings = Settings(data_dir=tmp_path)
-    monkeypatch.setattr(adwatch.cli.Settings, "from_env", lambda: settings)
-    source = tmp_path / "reconcile.csv"
-    source.write_text(
-        "field,expected,actual,category\n"
-        "spend,400.00,400.00,money\n"
-        "gmv,1066.00,1066.00,money\n"
-        "orders,5,5,count\n"
-        "roas,2.67,2.6650,ratio\n",
-        encoding="utf-8",
-    )
-    assert main(
-        [
-            "reconcile",
-            "import",
-            "--platform",
-            "shopee",
-            "--store",
-            "shop",
-            "--date",
-            "2026-07-28",
-            "--file",
-            str(source),
-        ]
-    ) == 0
-    assert "accuracy=1.0000" in capsys.readouterr().out
-    assert main(
-        [
-            "reconcile",
-            "report",
-            "--platform",
-            "shopee",
-            "--store",
-            "shop",
-            "--from",
-            "2026-07-28",
-            "--to",
-            "2026-07-28",
-        ]
-    ) == 0
-    assert "accuracy=1.0000" in capsys.readouterr().out
-
-
-def test_strategy_replay_reports_pending_when_history_is_missing(
-    tmp_path, monkeypatch, capsys
-):
-    settings = Settings(data_dir=tmp_path)
-    monkeypatch.setattr(adwatch.cli.Settings, "from_env", lambda: settings)
-    result = main(
-        [
-            "strategy",
-            "replay",
-            "--platform",
-            "shopee",
-            "--store",
-            "shop",
-            "--campaign",
-            "C-1",
-            "--from",
-            "2026-07-01",
-            "--to",
-            "2026-07-28",
-        ]
-    )
-    assert result == 2
-    assert "pending_data" in capsys.readouterr().out
-
-
-def test_order_costs_satisfy_launch_business_cost_gate(
-    tmp_path, monkeypatch, capsys
-):
-    settings = Settings(data_dir=tmp_path)
-    monkeypatch.setattr(adwatch.cli.Settings, "from_env", lambda: settings)
-    monkeypatch.setattr(adwatch.cli, "_ziniao_bridge_ready", lambda: False)
-    database = Database(settings.database_path)
-    database.migrate()
-    with database.transaction() as connection:
-        connection.execute(
-            """
-            INSERT INTO order_cost_lines(
-                platform, store, order_id, sku_id, order_date, quantity,
-                unit_cost_cny, line_cost_cny, source_file
-            ) VALUES (
-                'shopee', 'store', 'order', '1 bag', '2026-07-23',
-                1, '5', '5', 'orders.xlsx'
-            )
-            """
+from adwatch.optimizer.daily import DailyRunResult
+from adwatch.optimizer.database import OptimizerDatabase
+from adwatch.optimizer.evaluator import EvaluatorService
+from adwatch.optimizer.models import (
+    AdMetric,
+    DataQuality,
+    DataQualityStatus,
+    MetricGrain,
+)
+from adwatch.optimizer.policy import Optimizer
+from adwatch.optimizer.repository import OptimizerRepository
+
+
+class _Runtime:
+    def __init__(self) -> None:
+        self.calls: list[tuple[object, ...]] = []
+
+    def initialize(self, report_date: date) -> DailyRunResult:
+        self.calls.append(("init", report_date))
+        return DailyRunResult("success", report_date, Path("init.md"))
+
+    def collect(self, data_date: date) -> str:
+        self.calls.append(("collect", data_date))
+        return "success"
+
+    def run_daily(self, report_date: date) -> DailyRunResult:
+        self.calls.append(("daily", report_date))
+        return DailyRunResult("success", report_date, Path("daily.md"))
+
+    def dashboard(self, port: int) -> None:
+        self.calls.append(("dashboard", "127.0.0.1", port))
+
+    def schedule(self, action: str) -> str:
+        self.calls.append(("schedule", action))
+        return "healthy"
+
+    def doctor(self, port: int) -> tuple[tuple[str, bool], ...]:
+        self.calls.append(("doctor", port))
+        return (
+            ("runtime", True),
+            ("database", True),
+            ("ziniao_cli", True),
+            ("shopee_store", True),
+            ("local_port", True),
         )
 
-    assert main(["launch-checklist", "--format", "markdown"]) == 0
 
-    assert "business_costs" not in capsys.readouterr().out
-
-
-def test_supplier_sku_facts_clear_mapping_refund_and_inventory_gates(
-    tmp_path, monkeypatch, capsys
-):
-    settings = Settings(data_dir=tmp_path)
+@pytest.fixture
+def runtime(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> _Runtime:
+    value = _Runtime()
+    settings = Settings(data_dir=tmp_path, ziniao_shopee_store_id="store-1")
     monkeypatch.setattr(adwatch.cli.Settings, "from_env", lambda: settings)
-    monkeypatch.setattr(adwatch.cli, "_ziniao_bridge_ready", lambda: True)
-    database = Database(settings.database_path)
-    database.migrate()
-    with database.transaction() as connection:
-        connection.execute(
-            """
-            INSERT INTO sku_cost_history VALUES(
-              'shopee','shop','SKU-1','2026-07-01','5','',
-              '2026-07-01T00:00:00Z')
-            """
-        )
-        connection.execute(
-            """
-            INSERT INTO sku_fulfillment_history VALUES(
-              'shopee','shop','SKU-1','2026-07-01',
-              'supplier_fulfilled','available','',
-              '2026-07-01T00:00:00Z')
-            """
-        )
-        connection.execute(
-            """
-            INSERT INTO platform_order_lines VALUES(
-              'shopee','shop','ORDER-1','SKU-1','SKU-1','SKU-1',
-              '1 bag','Product',1,'100','THB','completed','delivered',
-              'returned','2026-07-23','2026-07-24T00:00:00Z')
-            """
-        )
-        connection.execute(
-            """
-            INSERT INTO platform_sku_mappings VALUES(
-              'shopee','shop','SKU-1','SKU-1','SKU-1','1 bag',
-              'Product',0,'2026-07-24T00:00:00Z')
-            """
-        )
-
-    assert main(["launch-checklist", "--format", "markdown"]) == 0
-
-    output = capsys.readouterr().out
-    assert "business_costs" not in output
-    assert "sku_mapping" not in output
-    assert "order_cost_coverage" not in output
-    assert "refund_source" not in output
-    assert "inventory_source" not in output
+    monkeypatch.setattr(adwatch.cli, "_build_optimizer_runtime", lambda _: value)
+    monkeypatch.setattr(adwatch.cli, "_business_today", lambda _: date(2026, 9, 11))
+    return value
 
 
-def test_supplier_store_default_makes_inventory_not_applicable(
-    tmp_path, monkeypatch, capsys
-):
-    settings = Settings(data_dir=tmp_path)
-    monkeypatch.setattr(adwatch.cli.Settings, "from_env", lambda: settings)
-    monkeypatch.setattr(adwatch.cli, "_ziniao_bridge_ready", lambda: True)
-    database = Database(settings.database_path)
-    database.migrate()
-    with database.transaction() as connection:
-        connection.execute(
-            """
-            INSERT INTO store_fulfillment_history VALUES(
-              'shopee','shop','2026-01-01','supplier_fulfilled',
-              'available','default supplier fulfilled',
-              '2026-01-01T00:00:00Z')
-            """
-        )
-
-    assert main(["launch-checklist", "--format", "markdown"]) == 0
-
-    assert "inventory_source" not in capsys.readouterr().out
-
-
-def test_cancelled_order_without_sku_facts_does_not_block_mapping_gate(
-    tmp_path, monkeypatch, capsys
-):
-    settings = Settings(data_dir=tmp_path)
-    monkeypatch.setattr(adwatch.cli.Settings, "from_env", lambda: settings)
-    monkeypatch.setattr(adwatch.cli, "_ziniao_bridge_ready", lambda: True)
-    database = Database(settings.database_path)
-    database.migrate()
-    with database.transaction() as connection:
-        connection.execute(
-            """
-            INSERT INTO platform_order_lines VALUES(
-              'shopee','shop','CANCELLED-1','OLD-SKU','OLD-SKU','OLD-SKU',
-              '1 bag','Product',1,'100','THB','cancelled','cancelled',
-              '','2026-07-23','2026-07-24T00:00:00Z')
-            """
-        )
-
-    assert main(["launch-checklist", "--format", "markdown"]) == 0
-
-    assert "sku_mapping" not in capsys.readouterr().out
-
-
-def test_business_sync_exchange_rates(tmp_path, monkeypatch, capsys):
-    settings = Settings(data_dir=tmp_path)
-    monkeypatch.setattr(adwatch.cli.Settings, "from_env", lambda: settings)
-    monkeypatch.setattr(
-        adwatch.cli.EcbExchangeRateSource,
-        "fetch_range",
-        lambda self, currency, start, end: {
-            start: Decimal("0.201"),
-            end: Decimal("0.202"),
-        },
+def test_parser_exposes_only_six_optimizer_commands() -> None:
+    parser = build_parser()
+    subparsers = next(
+        action for action in parser._actions if action.dest == "command"
     )
 
-    assert (
-        main(
-            [
-                "business",
-                "sync-exchange-rates",
-                "--currency",
-                "THB",
-                "--from",
-                "2026-07-26",
-                "--to",
-                "2026-07-27",
-            ]
-        )
-        == 0
-    )
-
-    assert "Synced 2 THB/CNY exchange rates" in capsys.readouterr().out
-
-
-def test_business_sync_exchange_rates_reports_network_failure(
-    tmp_path, monkeypatch, capsys
-):
-    settings = Settings(data_dir=tmp_path)
-    monkeypatch.setattr(adwatch.cli.Settings, "from_env", lambda: settings)
-    monkeypatch.setattr(
-        adwatch.cli.EcbExchangeRateSource,
-        "fetch_range",
-        lambda *args, **kwargs: (_ for _ in ()).throw(OSError("offline")),
-    )
-
-    result = main(
-        [
-            "business",
-            "sync-exchange-rates",
-            "--from",
-            "2026-07-26",
-            "--to",
-            "2026-07-27",
-        ]
-    )
-
-    assert result == 2
-    assert "Exchange-rate sync failed: offline" in capsys.readouterr().out
-
-
-def test_business_sync_orders_reports_pending_facts(
-    tmp_path, monkeypatch, capsys
-):
-    settings = Settings(data_dir=tmp_path)
-    monkeypatch.setattr(adwatch.cli.Settings, "from_env", lambda: settings)
-    database = Database(settings.database_path)
-    database.migrate()
-    with database.transaction() as connection:
-        connection.execute(
-            """
-            INSERT INTO platform_order_lines VALUES(
-              'shopee','shop','ORDER-1','item','model','SKU-1',
-              '1 bag','Product',1,'100','THB','completed','delivered','',
-              '2026-07-23','2026-07-24T00:00:00Z')
-            """
-        )
-
-    assert main(["business", "sync-orders"]) == 2
-
-    output = capsys.readouterr().out
-    assert "pending_fulfillment=1" in output
-
-
-def test_business_sync_orders_reports_unmapped_order_identity(
-    tmp_path, monkeypatch, capsys
-):
-    settings = Settings(data_dir=tmp_path)
-    monkeypatch.setattr(adwatch.cli.Settings, "from_env", lambda: settings)
-    database = Database(settings.database_path)
-    database.migrate()
-    with database.transaction() as connection:
-        connection.executemany(
-            """
-            INSERT INTO platform_order_lines VALUES(
-              'shopee','shop','ORDER-AMBIGUOUS',?,?, 'SKU-1',
-              '1 bag','Product',1,'100','THB','completed','delivered','',
-              '2026-07-23',?)
-            """,
-            (
-                ("item-1", "model-1", "2026-07-24T00:00:00Z"),
-                ("item-2", "model-2", "2026-07-25T00:00:00Z"),
-            ),
-        )
-
-    assert main(["business", "sync-orders"]) == 2
-
-    output = capsys.readouterr().out
-    assert "pending_order_identity=1" in output
-
-
-def test_business_fulfillment_cli_sets_single_and_bulk_policies(
-    tmp_path, monkeypatch, capsys
-):
-    settings = Settings(data_dir=tmp_path)
-    monkeypatch.setattr(adwatch.cli.Settings, "from_env", lambda: settings)
-    database = Database(settings.database_path)
-    database.migrate()
-    OrderRepository(database).set_sku_cost(
-        platform="shopee",
-        store="shop",
-        seller_sku="SKU-1",
-        effective_date=date(2026, 4, 1),
-        unit_cost_cny=Decimal(5),
-    )
-
-    assert (
-        main(
-            [
-                "business",
-                "set-fulfillment",
-                "--platform",
-                "shopee",
-                "--store",
-                "shop",
-                "--sku",
-                "SKU-1",
-                "--effective-date",
-                "2026-08-01",
-                "--mode",
-                "stocked",
-                "--supply-status",
-                "available",
-            ]
-        )
-        == 0
-    )
-    assert (
-        main(
-            [
-                "business",
-                "mark-current-skus-supplier-fulfilled",
-                "--platform",
-                "shopee",
-                "--store",
-                "shop",
-            ]
-        )
-        == 0
-    )
-    output = capsys.readouterr().out
-    assert "mode=stocked" in output
-    assert "marked_supplier_fulfilled=1" in output
-
-
-def test_weekly_report_cli_writes_local_file(tmp_path, monkeypatch):
-    settings = Settings(data_dir=tmp_path)
-    monkeypatch.setattr(adwatch.cli.Settings, "from_env", lambda: settings)
-    assert main(["init"]) == 0
-
-    assert main(["report", "weekly", "--end", "2026-07-26"]) == 0
-
-    path = tmp_path / "reports" / "weekly-2026-07-26.md"
-    assert path.exists()
-    assert "# 广告周报" in path.read_text()
-
-
-def test_daily_report_cli_writes_local_file(tmp_path, monkeypatch, capsys):
-    settings = Settings(data_dir=tmp_path)
-    monkeypatch.setattr(adwatch.cli.Settings, "from_env", lambda: settings)
-    assert main(["init"]) == 0
-
-    assert main(["report", "daily", "--date", "2026-07-26"]) == 0
-
-    path = tmp_path / "reports" / "daily-2026-07-26.md"
-    assert path.exists()
-    assert "# 广告经营日报｜2026-07-26" in path.read_text()
-    assert str(path) in capsys.readouterr().out
-
-
-def test_backup_verify_cli_rejects_corrupt_database(
-    tmp_path, monkeypatch, capsys
-):
-    settings = Settings(data_dir=tmp_path)
-    monkeypatch.setattr(adwatch.cli.Settings, "from_env", lambda: settings)
-    path = tmp_path / "broken.sqlite3"
-    path.write_bytes(b"not sqlite")
-
-    assert main(["backup", "verify", "--path", str(path)]) == 2
-
-    assert "verification failed" in capsys.readouterr().out.lower()
-
-
-def test_live_execution_cli_refuses_before_page_access(
-    tmp_path, monkeypatch, capsys
-):
-    settings = Settings(data_dir=tmp_path, live_writes=False)
-    monkeypatch.setattr(adwatch.cli.Settings, "from_env", lambda: settings)
-
-    assert (
-        main(
-            [
-                "execute",
-                "live",
-                "--approval-id",
-                "approval-1",
-                "--idempotency-key",
-                "run-1",
-                "--expected-before",
-                '{"budget":"100"}',
-            ]
-        )
-        == 2
-    )
-
-    assert "ADWATCH_LIVE_WRITES is disabled" in capsys.readouterr().out
-
-
-def test_shadow_execution_cli_runs_safe_executor(
-    tmp_path, monkeypatch, capsys
-):
-    settings = Settings(data_dir=tmp_path)
-    calls = {}
-
-    class FakeResult:
-        audit_id = "audit-1"
-        status = "succeeded"
-
-    class FakeExecutor:
-        def __init__(self, database, backend):
-            calls["backend_mode"] = backend.mode
-
-        def execute(self, approval_id, *, idempotency_key, expected_before):
-            calls.update(
-                approval_id=approval_id,
-                idempotency_key=idempotency_key,
-                expected_before=expected_before,
-            )
-            return FakeResult()
-
-    monkeypatch.setattr(adwatch.cli.Settings, "from_env", lambda: settings)
-    monkeypatch.setattr(adwatch.cli, "SafeExecutor", FakeExecutor)
-
-    assert (
-        main(
-            [
-                "execute",
-                "shadow",
-                "--approval-id",
-                "approval-1",
-                "--idempotency-key",
-                "run-1",
-                "--expected-before",
-                '{"budget":"100"}',
-            ]
-        )
-        == 0
-    )
-
-    assert calls == {
-        "backend_mode": "shadow",
-        "approval_id": "approval-1",
-        "idempotency_key": "run-1",
-        "expected_before": {"budget": "100"},
+    assert set(subparsers.choices) == {
+        "init", "collect", "run", "dashboard", "schedule", "doctor"
     }
-    assert "audit=audit-1 status=succeeded" in capsys.readouterr().out
 
 
-def test_activation_register_and_list_cli(tmp_path, monkeypatch, capsys):
-    settings = Settings(data_dir=tmp_path)
-    monkeypatch.setattr(adwatch.cli.Settings, "from_env", lambda: settings)
-    selectors = tmp_path / "selectors.json"
-    selectors.write_text(
-        '{"value":"#value","stage":"#stage","submit":"#submit"}'
-    )
-    before = tmp_path / "before.png"
-    after = tmp_path / "after.png"
-    before.write_bytes(b"before")
-    after.write_bytes(b"after")
+def test_collect_is_shopee_only_and_rejects_legacy_mode(runtime: _Runtime) -> None:
+    assert main(["collect", "--date", "2026-09-10"]) == 0
+    assert runtime.calls == [("collect", date(2026, 9, 10))]
 
-    assert (
-        main(
-            [
-                "activation",
-                "register",
-                "--platform",
-                "shopee",
-                "--action",
-                "reduce_budget",
-                "--version",
-                "v1",
-                "--store-id",
-                "store-1",
-                "--selectors-file",
-                str(selectors),
-                "--activated-by",
-                "boss",
-                "--evidence-before",
-                str(before),
-                "--evidence-after",
-                str(after),
-            ]
-        )
-        == 0
-    )
-    assert main(["activation", "list"]) == 0
+    assert main(["collect", "--mode", "mock"]) == 2
+    assert runtime.calls == [("collect", date(2026, 9, 10))]
 
+
+def test_init_backfills_through_today_and_immediately_reports(
+    runtime: _Runtime, capsys: pytest.CaptureFixture[str]
+) -> None:
+    assert main(["init"]) == 0
+    assert runtime.calls == [("init", date(2026, 9, 11))]
     output = capsys.readouterr().out
-    assert "shopee/reduce_budget" in output
-    assert "version=v1" in output
+    assert "status=success" in output
+    assert "report=init.md" in output
+
+
+def test_run_daily_defaults_to_shanghai_business_today(runtime: _Runtime) -> None:
+    assert main(["run", "daily"]) == 0
+    assert runtime.calls == [("daily", date(2026, 9, 11))]
+
+
+def test_run_rejects_non_daily_workflow(runtime: _Runtime) -> None:
+    assert main(["run", "scheduled-daily"]) == 2
+    assert runtime.calls == []
+
+
+def test_dashboard_has_no_remote_bind_option(runtime: _Runtime) -> None:
+    assert main(["dashboard", "--port", "9000"]) == 0
+    assert runtime.calls == [("dashboard", "127.0.0.1", 9000)]
+    assert main(["dashboard", "--host", "0.0.0.0"]) == 2
+
+
+@pytest.mark.parametrize("action", ["install", "status", "uninstall"])
+def test_schedule_exposes_only_three_actions(runtime: _Runtime, action: str) -> None:
+    assert main(["schedule", action]) == 0
+    assert runtime.calls == [("schedule", action)]
+
+
+def test_doctor_reports_only_five_local_checks(
+    runtime: _Runtime, capsys: pytest.CaptureFixture[str]
+) -> None:
+    assert main(["doctor"]) == 0
+    assert capsys.readouterr().out.splitlines() == [
+        "runtime=ok",
+        "database=ok",
+        "ziniao_cli=ok",
+        "shopee_store=ok",
+        "local_port=ok",
+    ]
+    assert runtime.calls == [("doctor", 8765)]
+
+
+def test_doctor_returns_failure_if_a_required_check_fails(
+    runtime: _Runtime, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        runtime,
+        "doctor",
+        lambda port: (("runtime", True), ("database", False)),
+    )
+
+    assert main(["doctor"]) == 2
+
+
+def test_help_does_not_construct_runtime(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        adwatch.cli,
+        "_build_optimizer_runtime",
+        lambda _: pytest.fail("help must not construct runtime"),
+        raising=False,
+    )
+    assert main(["--help"]) == 0
+
+
+def test_doctor_runtime_can_be_built_when_store_configuration_is_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    settings = Settings(data_dir=tmp_path)
+    monkeypatch.setattr(adwatch.cli.shutil, "which", lambda _: None)
+
+    runtime = adwatch.cli._build_optimizer_runtime(settings)
+
+    checks = dict(runtime.doctor(8765))
+    assert checks["shopee_store"] is False
+
+
+def test_doctor_converts_database_errors_to_failed_check(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runtime = adwatch.cli._build_optimizer_runtime(Settings(data_dir=tmp_path))
+
+    class BrokenDatabase:
+        def migrate(self) -> None:
+            raise sqlite3.OperationalError("secret path")
+
+    runtime.database = BrokenDatabase()  # type: ignore[assignment]
+    monkeypatch.setattr(adwatch.cli.shutil, "which", lambda _: None)
+
+    assert dict(runtime.doctor(8765))["database"] is False
+
+
+def test_doctor_rejects_quick_check_database_without_optimizer_schema(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runtime = adwatch.cli._build_optimizer_runtime(Settings(data_dir=tmp_path))
+    empty_path = tmp_path / "empty.sqlite3"
+
+    class MissingSchemaDatabase:
+        def migrate(self) -> None:
+            return None
+
+        def connect(self) -> sqlite3.Connection:
+            return sqlite3.connect(empty_path)
+
+    runtime.database = MissingSchemaDatabase()  # type: ignore[assignment]
+    monkeypatch.setattr(adwatch.cli.shutil, "which", lambda _: None)
+
+    assert dict(runtime.doctor(8765))["database"] is False
+
+
+def test_real_workflow_passes_recent_start_to_campaign_read_model(tmp_path: Path) -> None:
+    settings = Settings(data_dir=tmp_path, history_days=30)
+    database = OptimizerDatabase(settings.database_path)
+    database.migrate()
+    repository = OptimizerRepository(database)
+    workflow = adwatch.cli._WorkflowStages(
+        repository,
+        Optimizer(repository, settings),
+        EvaluatorService(repository, settings),
+        recent_days=settings.history_days,
+    )
+
+    assert workflow.ensure_profiles(
+        "store-1", date(2026, 9, 10), datetime(2026, 9, 11, tzinfo=UTC)
+    ) == ()
+
+
+def test_second_campaign_planning_failure_leaves_no_partial_recommendations(
+    tmp_path: Path,
+) -> None:
+    settings = Settings(data_dir=tmp_path, history_days=30)
+    database = OptimizerDatabase(settings.database_path)
+    database.migrate()
+    repository = OptimizerRepository(database)
+    observed_at = datetime(2026, 9, 11, tzinfo=UTC)
+    for campaign_id in ("campaign-a", "campaign-b"):
+        repository.upsert_metric(
+            AdMetric(
+                "store-1", campaign_id, campaign_id, "__ALL__",
+                date(2026, 9, 10), "THB", Decimal(10),
+                Decimal(30), 3, observed_at, "test",
+                MetricGrain.CAMPAIGN,
+            )
+        )
+    actual = Optimizer(repository, settings)
+
+    class FailSecond:
+        def plan(self, store_id, campaign_id, data_date, quality, decision_at):
+            if campaign_id == "campaign-b":
+                raise RuntimeError("second failed")
+            return actual.plan(store_id, campaign_id, data_date, quality, decision_at)
+
+        def recommend(self, store_id, campaign_id, data_date, quality, decision_at):
+            if campaign_id == "campaign-b":
+                raise RuntimeError("second failed")
+            return actual.recommend(
+                store_id, campaign_id, data_date, quality, decision_at
+            )
+
+    workflow = adwatch.cli._WorkflowStages(
+        repository,
+        FailSecond(),
+        EvaluatorService(repository, settings),
+        recent_days=settings.history_days,
+    )
+
+    with pytest.raises(RuntimeError, match="second failed"):
+        workflow.recommend(
+            "store-1",
+            date(2026, 9, 10),
+            DataQuality(DataQualityStatus.STALE, observed_at),
+            observed_at,
+        )
+
+    assert repository.list_recommendations(
+        "store-1", "campaign-a", date(2026, 9, 10)
+    ) == ()
+
+
+def test_cli_has_no_runtime_dependency_on_legacy_scheduler() -> None:
+    assert "adwatch.operations.scheduler" not in inspect.getsource(adwatch.cli)
+
+
+def test_runtime_schedule_uses_new_optimizer_schedule_manager(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    observed: dict[str, object] = {}
+
+    class Status:
+        installed = False
+        healthy = False
+
+    class Manager:
+        def __init__(self, **kwargs: object) -> None:
+            observed.update(kwargs)
+
+        def status(self) -> Status:
+            return Status()
+
+    other_directory = tmp_path / "other"
+    other_directory.mkdir()
+    monkeypatch.chdir(other_directory)
+    monkeypatch.setattr(adwatch.cli, "ScheduleManager", Manager)
+    runtime = adwatch.cli._build_optimizer_runtime(Settings(data_dir=tmp_path))
+
+    assert runtime.schedule("status") == "not_installed"
+    assert observed["project_dir"] == Path(adwatch.cli.__file__).resolve().parents[2]
+    assert observed["settings"] == runtime.settings
+    assert callable(observed["doctor"])
+
+
+def test_dashboard_passes_configured_campaign_history_window(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    observed: dict[str, object] = {}
+    settings = Settings(data_dir=tmp_path, history_days=17)
+    runtime = adwatch.cli._build_optimizer_runtime(settings)
+    monkeypatch.setattr(
+        adwatch.cli,
+        "serve_optimizer_web",
+        lambda repository, **kwargs: observed.update(kwargs),
+    )
+
+    runtime.dashboard(9000)
+
+    assert observed["campaign_recent_days"] == 17

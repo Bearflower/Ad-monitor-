@@ -1,0 +1,22 @@
+{
+  "fixture_kind": "synthetic_contract",
+  "source": "test-fixture",
+  "captured_at": "2026-09-09T01:02:03+00:00",
+  "store_id": "store-1",
+  "campaign_rows": [
+    {
+      "page_campaign_id": "page-campaign-no-status",
+      "detail_href": null,
+      "item_id": "item-3",
+      "name": "状态未暴露的活动",
+      "type": "product_ads",
+      "status": null,
+      "current_budget": "฿100.00",
+      "target_roas": "3.2",
+      "currency": "THB"
+    }
+  ],
+  "pagination": {"page": "1", "total_pages": "1", "has_next": false},
+  "missing_fields": ["status"],
+  "stable_id_evidence": {"preferred_order": ["page_campaign_id", "detail_href", "store_id+type+item_id"]}
+}

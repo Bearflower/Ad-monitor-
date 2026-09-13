@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -22,37 +23,130 @@ def _dotenv_values(path: Path) -> dict[str, str]:
 @dataclass(frozen=True)
 class Settings:
     data_dir: Path
-    evidence_root: Path | None = None
-    ziniao_company: str = ""
-    ziniao_username: str = ""
-    ziniao_password: str = ""
-    ziniao_endpoint: str = ""
-    ziniao_tiktok_store_id: str = ""
-    ziniao_tiktok_store_name: str = "TikTok Store"
     ziniao_shopee_store_id: str = ""
     ziniao_shopee_store_name: str = "Shopee Store"
-    feishu_webhook: str = ""
-    feishu_callback_secret: str = ""
-    feishu_callback_public_url: str = ""
-    tiktok_api_oauth: str = ""
-    shopee_api_oauth: str = ""
-    tiktok_collection_enabled: bool = False
-    live_writes: bool = False
-    live_allowlist: frozenset[tuple[str, str, str]] = frozenset()
     daily_run_time: str = "09:00"
     timezone: str = "Asia/Shanghai"
     bridge_retries: int = 3
     bridge_retry_delay_seconds: int = 10
-    exchange_rate_max_staleness_days: int = 7
-    shopee_history_lookback_days: int = 3
-    income_scan_root: Path | None = None
-    openai_api_key: str = ""
-    knowledge_model: str = "gpt-5.6-terra"
-    knowledge_enrichment: bool = True
-    knowledge_max_pages_per_run: int = 50
-    knowledge_request_delay_ms: int = 1500
-    publish_ssh_target: str = ""
-    publish_container: str = "adwatch"
+    page_ready_retries: int = 10
+    page_ready_retry_delay_seconds: int = 1
+    ziniao_cli_timeout_seconds: int = 30
+    shopee_ads_max_pages: int = 20
+    shopee_currency: str = "THB"
+    history_days: int = 30
+    no_data_recheck_days: int = 7
+    backfill_claim_minutes: int = 15
+    web_host: str = "127.0.0.1"
+    web_port: int = 8765
+    web_max_body_bytes: int = 65_536
+    web_nonce_ttl_seconds: int = 1800
+    reconciliation_tolerance: Decimal = Decimal("0.01")
+    short_window_days: int = 7
+    long_window_days: int = 30
+    default_budget_step: Decimal = Decimal("0.10")
+    low_confidence_budget_step: Decimal = Decimal("0.05")
+    max_budget_step: Decimal = Decimal("0.20")
+    max_target_roas_step: Decimal = Decimal("0.20")
+    min_orders: int = 3
+    min_history_days: int = 3
+    cooldown_days: int = 3
+    evaluation_days: int = 7
+    min_budget_utilization: Decimal = Decimal("0.80")
+    floor_guard_band: Decimal = Decimal("0.10")
+    severe_underperformance_ratio: Decimal = Decimal("0.70")
+    structure_winner_share: Decimal = Decimal("0.70")
+    structure_min_items: int = 2
+    effectiveness_min_samples: int = 5
+    default_growth_intensity: Decimal = Decimal("0.50")
+    rollback_days: int = 3
+    minimum_gmv_growth: Decimal = Decimal("0.05")
+    budget_quantum: Decimal = Decimal("0.01")
+    roas_quantum: Decimal = Decimal("0.01")
+
+    def __post_init__(self) -> None:
+        for name in (
+            "bridge_retries",
+            "bridge_retry_delay_seconds",
+            "page_ready_retries",
+            "page_ready_retry_delay_seconds",
+            "ziniao_cli_timeout_seconds",
+            "shopee_ads_max_pages",
+            "history_days",
+            "no_data_recheck_days",
+            "backfill_claim_minutes",
+            "web_max_body_bytes",
+            "web_nonce_ttl_seconds",
+            "short_window_days",
+            "long_window_days",
+            "min_orders",
+            "min_history_days",
+            "evaluation_days",
+            "structure_min_items",
+            "effectiveness_min_samples",
+            "rollback_days",
+        ):
+            if (
+                not isinstance(getattr(self, name), int)
+                or isinstance(getattr(self, name), bool)
+                or getattr(self, name) <= 0
+            ):
+                raise ValueError(f"{name} must be a positive integer")
+        if (
+            not isinstance(self.cooldown_days, int)
+            or isinstance(self.cooldown_days, bool)
+            or self.cooldown_days < 0
+        ):
+            raise ValueError("cooldown_days must be a non-negative integer")
+        if self.long_window_days < self.short_window_days:
+            raise ValueError("long_window_days must be at least short_window_days")
+        if (
+            not isinstance(self.web_port, int)
+            or isinstance(self.web_port, bool)
+            or not 1 <= self.web_port <= 65535
+        ):
+            raise ValueError("web_port must be between 1 and 65535")
+        if self.web_host != "127.0.0.1":
+            raise ValueError("web_host must be 127.0.0.1")
+        for name in (
+            "reconciliation_tolerance",
+            "default_budget_step",
+            "low_confidence_budget_step",
+            "max_budget_step",
+            "max_target_roas_step",
+            "min_budget_utilization",
+            "floor_guard_band",
+            "severe_underperformance_ratio",
+            "structure_winner_share",
+            "default_growth_intensity",
+            "minimum_gmv_growth",
+            "budget_quantum",
+            "roas_quantum",
+        ):
+            value = getattr(self, name)
+            if not isinstance(value, Decimal) or not value.is_finite():
+                raise ValueError(f"{name} must be finite")
+            maximum = Decimal(1) if name != "reconciliation_tolerance" else None
+            if value < 0 or (maximum is not None and value > maximum):
+                raise ValueError(
+                    f"{name} must be between 0 and 1"
+                    if maximum is not None
+                    else f"{name} must be non-negative"
+                )
+        if (
+            not self.low_confidence_budget_step
+            <= self.default_budget_step
+            <= self.max_budget_step
+        ):
+            raise ValueError(
+                "low_confidence_budget_step must not exceed default_budget_step or max_budget_step"
+            )
+        if self.budget_quantum <= 0 or self.roas_quantum <= 0:
+            raise ValueError("budget_quantum and roas_quantum must be positive")
+        if not isinstance(
+            self.shopee_currency, str
+        ) or self.shopee_currency.upper() not in {"THB", "USD", "CNY"}:
+            raise ValueError("shopee_currency must be THB, USD, or CNY")
 
     @classmethod
     def from_env(cls) -> Settings:
@@ -61,11 +155,6 @@ class Settings:
         def value(name: str, default: str = "") -> str:
             return os.getenv(name, dotenv.get(name, default))
 
-        allowlist = frozenset(
-            tuple(item.strip().split(":", 2))
-            for item in value("ADWATCH_LIVE_ALLOWLIST").split(",")
-            if len(item.strip().split(":", 2)) == 3
-        )
         daily_run_time = value("ADWATCH_DAILY_RUN_TIME", "09:00")
         _parse_daily_time(daily_run_time)
         timezone = value("ADWATCH_TIMEZONE", "Asia/Shanghai")
@@ -77,79 +166,191 @@ class Settings:
             ) from error
 
         def positive_int(name: str, default: str) -> int:
-            parsed = int(value(name, default))
+            try:
+                parsed = int(value(name, default))
+            except ValueError as error:
+                raise ValueError(f"{name} must be a positive integer") from error
             if parsed <= 0:
                 raise ValueError(f"{name} must be a positive integer")
             return parsed
 
+        def non_negative_int(name: str, default: str) -> int:
+            try:
+                parsed = int(value(name, default))
+            except ValueError as error:
+                raise ValueError(f"{name} must be a non-negative integer") from error
+            if parsed < 0:
+                raise ValueError(f"{name} must be a non-negative integer")
+            return parsed
+
+        def decimal_between(
+            name: str,
+            default: str,
+            *,
+            minimum: Decimal,
+            maximum: Decimal | None = None,
+        ) -> Decimal:
+            try:
+                parsed = Decimal(value(name, default))
+            except InvalidOperation as error:
+                raise ValueError(f"{name} must be a decimal") from error
+            if not parsed.is_finite():
+                raise ValueError(f"{name} must be finite")
+            if parsed < minimum or (maximum is not None and parsed > maximum):
+                bounds = f">= {minimum}"
+                if maximum is not None:
+                    bounds = f"between {minimum} and {maximum}"
+                raise ValueError(f"{name} must be {bounds}")
+            return parsed
+
+        history_days = positive_int("ADWATCH_HISTORY_DAYS", "30")
+        no_data_recheck_days = positive_int("ADWATCH_NO_DATA_RECHECK_DAYS", "7")
+        backfill_claim_minutes = positive_int("ADWATCH_BACKFILL_CLAIM_MINUTES", "15")
+        web_host = value("ADWATCH_WEB_HOST", "127.0.0.1")
+        if web_host != "127.0.0.1":
+            raise ValueError("ADWATCH_WEB_HOST must be 127.0.0.1")
+        web_port = positive_int("ADWATCH_WEB_PORT", "8765")
+        if web_port > 65535:
+            raise ValueError("ADWATCH_WEB_PORT must be between 1 and 65535")
+        reconciliation_tolerance = decimal_between(
+            "ADWATCH_RECONCILIATION_TOLERANCE",
+            "0.01",
+            minimum=Decimal(0),
+        )
+        short_window_days = positive_int("ADWATCH_SHORT_WINDOW_DAYS", "7")
+        long_window_days = positive_int("ADWATCH_LONG_WINDOW_DAYS", "30")
+        if long_window_days < short_window_days:
+            raise ValueError(
+                "ADWATCH_LONG_WINDOW_DAYS must be at least ADWATCH_SHORT_WINDOW_DAYS"
+            )
+        low_confidence_budget_step = decimal_between(
+            "ADWATCH_LOW_CONFIDENCE_BUDGET_STEP",
+            "0.05",
+            minimum=Decimal(0),
+            maximum=Decimal(1),
+        )
+        default_budget_step = decimal_between(
+            "ADWATCH_DEFAULT_BUDGET_STEP",
+            "0.10",
+            minimum=Decimal(0),
+            maximum=Decimal(1),
+        )
+        max_budget_step = decimal_between(
+            "ADWATCH_MAX_BUDGET_STEP",
+            "0.20",
+            minimum=Decimal(0),
+            maximum=Decimal(1),
+        )
+        if not (low_confidence_budget_step <= default_budget_step <= max_budget_step):
+            raise ValueError(
+                "ADWATCH_LOW_CONFIDENCE_BUDGET_STEP must not exceed "
+                "ADWATCH_DEFAULT_BUDGET_STEP or ADWATCH_MAX_BUDGET_STEP"
+            )
+        max_target_roas_step = decimal_between(
+            "ADWATCH_MAX_TARGET_ROAS_STEP",
+            "0.20",
+            minimum=Decimal(0),
+            maximum=Decimal(1),
+        )
+        min_budget_utilization = decimal_between(
+            "ADWATCH_MIN_BUDGET_UTILIZATION",
+            "0.80",
+            minimum=Decimal(0),
+            maximum=Decimal(1),
+        )
+        floor_guard_band = decimal_between(
+            "ADWATCH_FLOOR_GUARD_BAND",
+            "0.10",
+            minimum=Decimal(0),
+            maximum=Decimal(1),
+        )
+        severe_underperformance_ratio = decimal_between(
+            "ADWATCH_SEVERE_UNDERPERFORMANCE_RATIO",
+            "0.70",
+            minimum=Decimal(0),
+            maximum=Decimal(1),
+        )
+        structure_winner_share = decimal_between(
+            "ADWATCH_STRUCTURE_WINNER_SHARE",
+            "0.70",
+            minimum=Decimal(0),
+            maximum=Decimal(1),
+        )
+        default_growth_intensity = decimal_between(
+            "ADWATCH_DEFAULT_GROWTH_INTENSITY",
+            "0.50",
+            minimum=Decimal(0),
+            maximum=Decimal(1),
+        )
+        minimum_gmv_growth = decimal_between(
+            "ADWATCH_MINIMUM_GMV_GROWTH",
+            "0.05",
+            minimum=Decimal(0),
+            maximum=Decimal(1),
+        )
+        budget_quantum = decimal_between(
+            "ADWATCH_BUDGET_QUANTUM", "0.01", minimum=Decimal(0)
+        )
+        roas_quantum = decimal_between(
+            "ADWATCH_ROAS_QUANTUM", "0.01", minimum=Decimal(0)
+        )
+        if budget_quantum == 0 or roas_quantum == 0:
+            raise ValueError(
+                "ADWATCH_BUDGET_QUANTUM and ADWATCH_ROAS_QUANTUM must be positive"
+            )
+
         return cls(
             data_dir=Path(value("ADWATCH_DATA_DIR", "var")).expanduser(),
-            evidence_root=(
-                Path(value("ADWATCH_EVIDENCE_ROOT")).expanduser()
-                if value("ADWATCH_EVIDENCE_ROOT")
-                else None
-            ),
-            ziniao_company=value("ZINIAO_COMPANY"),
-            ziniao_username=value("ZINIAO_USERNAME"),
-            ziniao_password=value("ZINIAO_PASSWORD"),
-            ziniao_endpoint=value("ZINIAO_ENDPOINT"),
-            ziniao_tiktok_store_id=value("ZINIAO_TIKTOK_STORE_ID"),
-            ziniao_tiktok_store_name=value(
-                "ZINIAO_TIKTOK_STORE_NAME", "TikTok Store"
-            ),
             ziniao_shopee_store_id=value("ZINIAO_SHOPEE_STORE_ID"),
-            ziniao_shopee_store_name=value(
-                "ZINIAO_SHOPEE_STORE_NAME", "Shopee Store"
-            ),
-            feishu_webhook=value("FEISHU_WEBHOOK"),
-            feishu_callback_secret=value("FEISHU_CALLBACK_SECRET"),
-            feishu_callback_public_url=value("FEISHU_CALLBACK_PUBLIC_URL"),
-            tiktok_api_oauth=value("TIKTOK_API_OAUTH"),
-            shopee_api_oauth=value("SHOPEE_API_OAUTH"),
-            tiktok_collection_enabled=value(
-                "ADWATCH_TIKTOK_COLLECTION_ENABLED", "false"
-            ).lower()
-            in {"1", "true", "yes"},
-            live_writes=value("ADWATCH_LIVE_WRITES").lower()
-            in {"1", "true", "yes"},
-            live_allowlist=allowlist,
+            ziniao_shopee_store_name=value("ZINIAO_SHOPEE_STORE_NAME", "Shopee Store"),
             daily_run_time=daily_run_time,
             timezone=timezone,
             bridge_retries=positive_int("ADWATCH_BRIDGE_RETRIES", "3"),
             bridge_retry_delay_seconds=positive_int(
                 "ADWATCH_BRIDGE_RETRY_DELAY_SECONDS", "10"
             ),
-            exchange_rate_max_staleness_days=positive_int(
-                "ADWATCH_EXCHANGE_RATE_MAX_STALENESS_DAYS", "7"
+            page_ready_retries=positive_int("ADWATCH_PAGE_READY_RETRIES", "10"),
+            page_ready_retry_delay_seconds=positive_int(
+                "ADWATCH_PAGE_READY_RETRY_DELAY_SECONDS", "1"
             ),
-            shopee_history_lookback_days=positive_int(
-                "ADWATCH_SHOPEE_HISTORY_LOOKBACK_DAYS", "3"
+            ziniao_cli_timeout_seconds=positive_int(
+                "ADWATCH_ZINIAO_CLI_TIMEOUT_SECONDS", "30"
             ),
-            income_scan_root=Path(
-                value(
-                    "ADWATCH_INCOME_SCAN_ROOT",
-                    str(
-                        Path.home()
-                        / "Library/Application Support/ziniaobrowserdatas"
-                    ),
-                )
-            ).expanduser(),
-            openai_api_key=value("OPENAI_API_KEY"),
-            knowledge_model=value(
-                "ADWATCH_KNOWLEDGE_MODEL", "gpt-5.6-terra"
+            shopee_ads_max_pages=positive_int("ADWATCH_SHOPEE_ADS_MAX_PAGES", "20"),
+            shopee_currency=value("ADWATCH_SHOPEE_CURRENCY", "THB").upper(),
+            history_days=history_days,
+            no_data_recheck_days=no_data_recheck_days,
+            backfill_claim_minutes=backfill_claim_minutes,
+            web_host=web_host,
+            web_port=web_port,
+            web_max_body_bytes=positive_int("ADWATCH_WEB_MAX_BODY_BYTES", "65536"),
+            web_nonce_ttl_seconds=positive_int(
+                "ADWATCH_WEB_NONCE_TTL_SECONDS", "1800"
             ),
-            knowledge_enrichment=value(
-                "ADWATCH_KNOWLEDGE_ENRICHMENT", "true"
-            ).lower()
-            in {"1", "true", "yes"},
-            knowledge_max_pages_per_run=positive_int(
-                "ADWATCH_KNOWLEDGE_MAX_PAGES_PER_RUN", "50"
+            reconciliation_tolerance=reconciliation_tolerance,
+            short_window_days=short_window_days,
+            long_window_days=long_window_days,
+            default_budget_step=default_budget_step,
+            low_confidence_budget_step=low_confidence_budget_step,
+            max_budget_step=max_budget_step,
+            max_target_roas_step=max_target_roas_step,
+            min_orders=positive_int("ADWATCH_MIN_ORDERS", "3"),
+            min_history_days=positive_int("ADWATCH_MIN_HISTORY_DAYS", "3"),
+            cooldown_days=non_negative_int("ADWATCH_COOLDOWN_DAYS", "3"),
+            evaluation_days=positive_int("ADWATCH_EVALUATION_DAYS", "7"),
+            min_budget_utilization=min_budget_utilization,
+            floor_guard_band=floor_guard_band,
+            severe_underperformance_ratio=severe_underperformance_ratio,
+            structure_winner_share=structure_winner_share,
+            structure_min_items=positive_int("ADWATCH_STRUCTURE_MIN_ITEMS", "2"),
+            effectiveness_min_samples=positive_int(
+                "ADWATCH_EFFECTIVENESS_MIN_SAMPLES", "5"
             ),
-            knowledge_request_delay_ms=positive_int(
-                "ADWATCH_KNOWLEDGE_REQUEST_DELAY_MS", "1500"
-            ),
-            publish_ssh_target=value("ADWATCH_PUBLISH_SSH_TARGET"),
-            publish_container=value("ADWATCH_PUBLISH_CONTAINER", "adwatch"),
+            default_growth_intensity=default_growth_intensity,
+            rollback_days=positive_int("ADWATCH_ROLLBACK_DAYS", "3"),
+            minimum_gmv_growth=minimum_gmv_growth,
+            budget_quantum=budget_quantum,
+            roas_quantum=roas_quantum,
         )
 
     @property
@@ -161,51 +362,12 @@ class Settings:
         return self.data_dir / "reports"
 
     @property
-    def evidence_dir(self) -> Path:
-        return self.evidence_root or self.data_dir / "evidence"
-
-    @property
     def daily_run_hour(self) -> int:
         return _parse_daily_time(self.daily_run_time)[0]
 
     @property
     def daily_run_minute(self) -> int:
         return _parse_daily_time(self.daily_run_time)[1]
-
-    @property
-    def ziniao_ready(self) -> bool:
-        return all(
-            (
-                self.ziniao_company,
-                self.ziniao_username,
-                self.ziniao_password,
-                self.ziniao_endpoint,
-            )
-        )
-
-    @property
-    def ziniao_cli_ready(self) -> bool:
-        return bool(self.ziniao_shopee_store_id) and (
-            not self.tiktok_collection_enabled
-            or bool(self.ziniao_tiktok_store_id)
-        )
-
-    @property
-    def enabled_ziniao_platforms(self) -> tuple[str, ...]:
-        if self.tiktok_collection_enabled:
-            return ("tiktok", "shopee")
-        return ("shopee",)
-
-    @property
-    def feishu_callback_ready(self) -> bool:
-        return bool(
-            self.feishu_callback_secret and self.feishu_callback_public_url
-        )
-
-    @property
-    def platform_api_oauth_ready(self) -> bool:
-        return bool(self.tiktok_api_oauth and self.shopee_api_oauth)
-
 
 def _parse_daily_time(raw: str) -> tuple[int, int]:
     try:
@@ -214,9 +376,7 @@ def _parse_daily_time(raw: str) -> tuple[int, int]:
             raise ValueError
         hour, minute = int(hour_text), int(minute_text)
     except ValueError as error:
-        raise ValueError(
-            "ADWATCH_DAILY_RUN_TIME must use HH:MM"
-        ) from error
+        raise ValueError("ADWATCH_DAILY_RUN_TIME must use HH:MM") from error
     if not 0 <= hour <= 23 or not 0 <= minute <= 59:
         raise ValueError("ADWATCH_DAILY_RUN_TIME must use a valid 24-hour time")
     return hour, minute

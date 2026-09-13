@@ -1,1 +1,0 @@
-"""Reports and delivery adapters."""

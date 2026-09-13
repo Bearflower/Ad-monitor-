@@ -1,0 +1,24 @@
+{
+  "fixture_kind": "synthetic_contract",
+  "source": "test-fixture",
+  "captured_at": "2026-09-09T01:02:03+00:00",
+  "store_id": "store-1",
+  "campaign_rows": [
+    {
+      "page_campaign_id": "page-campaign-1",
+      "detail_href": "https://seller.shopee.co.th/campaign/linked-campaign-2",
+      "item_id": "item-3",
+      "name": "可变展示名",
+      "type": "product_ads",
+      "status": "Ongoing",
+      "current_budget": "฿100.00",
+      "target_roas": "3.2",
+      "currency": "THB"
+    }
+  ],
+  "pagination": {"page": "1", "total_pages": "2", "has_next": true},
+  "missing_fields": [],
+  "stable_id_evidence": {
+    "preferred_order": ["page_campaign_id", "detail_href", "store_id+type+item_id"]
+  }
+}
