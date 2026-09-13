@@ -151,7 +151,11 @@ class OptimizerDailyService:
                     )
                 try:
                     return self._analysis_pipeline(
-                        run_prefix, report_date, now, include_profiles=True
+                        run_prefix,
+                        report_date,
+                        now,
+                        include_profiles=True,
+                        refresh_cutoff=decision_at is None,
                     )
                 except _StageFailed as error:
                     return self._failed_result(run_prefix, report_date, now, error)
@@ -171,7 +175,11 @@ class OptimizerDailyService:
                     return DailyRunResult("success", report_date, path, True)
                 try:
                     return self._analysis_pipeline(
-                        run_id, report_date, now, include_profiles=False
+                        run_id,
+                        report_date,
+                        now,
+                        include_profiles=False,
+                        refresh_cutoff=decision_at is None,
                     )
                 except _StageFailed as error:
                     return self._failed_result(run_id, report_date, now, error)
@@ -223,6 +231,7 @@ class OptimizerDailyService:
         decision_at: datetime,
         *,
         include_profiles: bool,
+        refresh_cutoff: bool,
     ) -> DailyRunResult:
         data_date = report_date - timedelta(days=1)
         self._stage(run_id, "session", decision_at, self.session.ensure_ready)
@@ -234,43 +243,44 @@ class OptimizerDailyService:
                 self.backfill.run(self.store_id, report_date)
             ),
         )
+        analysis_at = self._decision_at(None) if refresh_cutoff else decision_at
         if include_profiles:
             self._stage(
                 run_id,
                 "profiles",
-                decision_at,
+                analysis_at,
                 lambda: self.profiles.ensure_profiles(
-                    self.store_id, data_date, decision_at
+                    self.store_id, data_date, analysis_at
                 ),
             )
         quality = self._stage(
             run_id,
             "quality",
-            decision_at,
-            lambda: self.quality.assess(self.store_id, data_date, decision_at),
+            analysis_at,
+            lambda: self.quality.assess(self.store_id, data_date, analysis_at),
         )
         assert isinstance(quality, DataQuality)
         self._stage(
             run_id,
             "evaluate",
-            decision_at,
+            analysis_at,
             lambda: self.evaluator.evaluate_pending(
-                self.store_id, data_date, decision_at
+                self.store_id, data_date, analysis_at
             ),
         )
         self._stage(
             run_id,
             "recommend",
-            decision_at,
+            analysis_at,
             lambda: self.optimizer.recommend(
-                self.store_id, data_date, quality, decision_at
+                self.store_id, data_date, quality, analysis_at
             ),
         )
         report_path = self._stage(
             run_id,
             "report",
-            decision_at,
-            lambda: self.reporter.write(self.store_id, report_date, decision_at),
+            analysis_at,
+            lambda: self.reporter.write(self.store_id, report_date, analysis_at),
         )
         assert isinstance(report_path, Path)
         finished = self.clock().astimezone(UTC)

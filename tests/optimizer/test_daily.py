@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -168,6 +168,72 @@ def test_daily_locks_then_runs_stages_and_success_is_idempotent() -> None:
         for log in repository.logs.values()
         if log.details and "stage" in log.details
     } == {"session", "backfill", "quality", "evaluate", "recommend", "report"}
+
+
+def test_daily_analysis_cutoff_is_refreshed_after_backfill() -> None:
+    events: list[str] = []
+    current_time = [NOW]
+    after_backfill = NOW + timedelta(minutes=1)
+    analysis_times: list[datetime] = []
+
+    class AdvancingBackfill(_Stage):
+        def run(self, store_id: str, as_of: date) -> object:
+            assert (store_id, as_of) == ("store-1", REPORT_DATE)
+            self.events.append(self.name)
+            current_time[0] = after_backfill
+            return object()
+
+    class AnalysisStages:
+        def assess(
+            self, store_id: str, data_date: date, decision_at: datetime
+        ) -> DataQuality:
+            assert (store_id, data_date) == ("store-1", DATA_DATE)
+            analysis_times.append(decision_at)
+            events.append("quality")
+            return DataQuality(DataQualityStatus.HEALTHY, decision_at, True)
+
+        def evaluate_pending(
+            self, store_id: str, data_date: date, decision_at: datetime
+        ) -> None:
+            assert (store_id, data_date) == ("store-1", DATA_DATE)
+            analysis_times.append(decision_at)
+            events.append("evaluate")
+
+        def recommend(
+            self,
+            store_id: str,
+            data_date: date,
+            quality: DataQuality,
+            decision_at: datetime,
+        ) -> None:
+            assert (store_id, data_date) == ("store-1", DATA_DATE)
+            assert quality.status is DataQualityStatus.HEALTHY
+            analysis_times.append(decision_at)
+            events.append("recommend")
+
+        def write(
+            self, store_id: str, report_date: date, decision_at: datetime
+        ) -> Path:
+            assert (store_id, report_date) == ("store-1", REPORT_DATE)
+            analysis_times.append(decision_at)
+            events.append("report")
+            return Path("report.md")
+
+    analysis = AnalysisStages()
+    service = _service(
+        events,
+        backfill=AdvancingBackfill(events, "backfill"),
+        quality=analysis,
+        evaluator=analysis,
+        optimizer=analysis,
+        reporter=analysis,
+        clock=lambda: current_time[0],
+    )
+
+    result = service.run_daily(REPORT_DATE)
+
+    assert result.status == "success"
+    assert analysis_times == [after_backfill] * 4
 
 
 def test_collection_failure_stops_before_analysis_and_logs_safe_error() -> None:
