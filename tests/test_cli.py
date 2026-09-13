@@ -218,6 +218,48 @@ def test_real_workflow_passes_recent_start_to_campaign_read_model(tmp_path: Path
     ) == ()
 
 
+def test_real_workflow_propagates_placeholder_campaign_name_quality(
+    tmp_path: Path,
+) -> None:
+    settings = Settings(data_dir=tmp_path, history_days=30)
+    database = OptimizerDatabase(settings.database_path)
+    database.migrate()
+    repository = OptimizerRepository(database)
+    observed_at = datetime(2026, 9, 11, tzinfo=UTC)
+    data_date = date(2026, 9, 10)
+    repository.upsert_metric(
+        AdMetric(
+            "store-1",
+            "campaign-1",
+            "...",
+            "__ALL__",
+            data_date,
+            "THB",
+            Decimal(10),
+            Decimal(30),
+            3,
+            observed_at,
+            "test",
+            MetricGrain.CAMPAIGN,
+        )
+    )
+    repository.record_collection_day(
+        "store-1", data_date, "success", attempted_at=observed_at
+    )
+    workflow = adwatch.cli._WorkflowStages(
+        repository,
+        Optimizer(repository, settings),
+        EvaluatorService(repository, settings),
+        recent_days=settings.history_days,
+    )
+
+    quality = workflow.assess("store-1", data_date, observed_at)
+
+    assert quality.status is DataQualityStatus.DEGRADED
+    assert quality.allow_aggressive_scale is False
+    assert quality.missing_fields == ("campaign_name",)
+
+
 def test_second_campaign_planning_failure_leaves_no_partial_recommendations(
     tmp_path: Path,
 ) -> None:

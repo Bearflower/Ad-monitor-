@@ -18,13 +18,18 @@ from adwatch.optimizer.collector import ShopeeAdCollector
 from adwatch.optimizer.daily import DailyRunResult, FileRunLock, OptimizerDailyService
 from adwatch.optimizer.database import OptimizerDatabase
 from adwatch.optimizer.evaluator import EvaluatorService
-from adwatch.optimizer.models import DataQuality, DataQualityStatus
+from adwatch.optimizer.models import DataQuality, DataQualityStatus, MetricGrain
 from adwatch.optimizer.policy import Optimizer
 from adwatch.optimizer.report import ShopeeAdsReportService
 from adwatch.optimizer.repository import OptimizerRepository
 from adwatch.optimizer.scheduler import ScheduleCommandError, ScheduleManager
 from adwatch.optimizer.web import serve_optimizer_web
-from adwatch.optimizer.ziniao import ShopeeSession, ZiniaoCliClient, ZiniaoCliError
+from adwatch.optimizer.ziniao import (
+    ShopeeSession,
+    ZiniaoCliClient,
+    ZiniaoCliError,
+    normalize_campaign_name,
+)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -225,12 +230,31 @@ class _WorkflowStages:
             and snapshot.actual_data_date == data_date
             and bool(snapshot.metrics)
         )
+        missing_fields: list[str] = []
+        notes: list[str] = []
+        if not current:
+            missing_fields.append("current_campaign_metrics")
+            notes.append("当前报告日没有完整活动指标。")
+        if any(
+            metric.grain is MetricGrain.CAMPAIGN
+            and not normalize_campaign_name(metric.campaign_name)
+            for metric in snapshot.metrics
+        ):
+            missing_fields.append("campaign_name")
+            notes.append("部分活动名称未从 Shopee 页面完整获取。")
+        status = (
+            DataQualityStatus.STALE
+            if not current
+            else DataQualityStatus.DEGRADED
+            if missing_fields
+            else DataQualityStatus.HEALTHY
+        )
         return DataQuality(
-            DataQualityStatus.HEALTHY if current else DataQualityStatus.STALE,
+            status,
             decision_at,
-            allow_aggressive_scale=current,
-            missing_fields=() if current else ("current_campaign_metrics",),
-            note="" if current else "当前报告日没有完整活动指标。",
+            allow_aggressive_scale=status is DataQualityStatus.HEALTHY,
+            missing_fields=tuple(missing_fields),
+            note=" ".join(notes),
         )
 
     def evaluate_pending(
