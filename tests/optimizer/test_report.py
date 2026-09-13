@@ -270,6 +270,20 @@ def test_report_contains_complete_manual_action_sections_in_required_order(
         assert label in structure_section
 
 
+def test_report_replaces_placeholder_campaign_name_with_stable_id(
+    repository: OptimizerRepository, tmp_path: Path
+) -> None:
+    repository.upsert_metric(_metric("placeholder-name", campaign_name="..."))
+    _record_current_collection(repository)
+
+    report = ShopeeAdsReportService(repository, tmp_path / "reports").render(
+        "store-1", REPORT_DATE, DECISION_AT
+    )
+
+    assert "未获取活动名称（placeholder-name）" in report
+    assert "| ... (placeholder-name) |" not in report
+
+
 def test_report_uses_latest_visible_revision_per_slot_and_excludes_future_and_other_store(
     repository: OptimizerRepository, tmp_path: Path
 ) -> None:

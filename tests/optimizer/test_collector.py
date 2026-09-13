@@ -106,6 +106,28 @@ def test_synthetic_fixture_collects_overview_campaign_product_and_snapshot(
     )
 
 
+@pytest.mark.parametrize("name", ["", "   ", "...", "…", "—", "-"])
+def test_placeholder_campaign_name_degrades_quality_but_preserves_metric(
+    tmp_path: Path, name: str
+):
+    page = _synthetic_page()
+    page["campaign_rows"][0]["campaign_name"] = name
+    page["campaign_rows"][0]["name"] = name
+
+    result = ShopeeAdCollector(
+        _settings(tmp_path), FakePageReader(page)
+    ).collect(DAY)
+
+    assert "campaign_name" in result.quality.missing_fields
+    assert result.quality.status is DataQualityStatus.DEGRADED
+    assert result.quality.allow_aggressive_scale is False
+    assert any(
+        metric.campaign_id == "page-campaign-1"
+        and metric.item_id == "__ALL__"
+        for metric in result.metrics
+    )
+
+
 def test_real_empty_fixture_is_no_data_and_degraded(tmp_path: Path, repository: OptimizerRepository):
     fixture_path = Path(__file__).parent / "fixtures" / "shopee_ads_page.json"
     page = json.loads(fixture_path.read_text(encoding="utf-8"))

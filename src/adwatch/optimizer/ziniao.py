@@ -753,6 +753,17 @@ def parse_shopee_ads_page(
     if (
         any(
             isinstance(row, Mapping)
+            and not normalize_campaign_name(
+                _first_optional_text(row, "campaign_name", "name")
+            )
+            for row in row_values
+        )
+        and "campaign_name" not in missing_fields
+    ):
+        missing_fields.append("campaign_name")
+    if (
+        any(
+            isinstance(row, Mapping)
             and _campaign_status(row.get("status")) is CampaignStatus.UNKNOWN
             for row in row_values
         )
@@ -827,7 +838,9 @@ def _parse_campaign(
     status = _campaign_status(row.get("status"))
     if status is None:
         return None
-    name = _first_optional_text(row, "campaign_name", "name") or ""
+    name = normalize_campaign_name(
+        _first_optional_text(row, "campaign_name", "name")
+    )
     currency = normalize_currency(
         _optional_text(row.get("currency")) or default_currency
     )
@@ -915,6 +928,13 @@ _DECIMAL_TEXT_RE = re.compile(
     rf"(?:\s*(?P<suffix>{_DECIMAL_TOKEN}))?\s*$",
     flags=re.IGNORECASE,
 )
+_CAMPAIGN_NAME_PLACEHOLDER_RE = re.compile(r"^[.。…·\-—–_]+$")
+
+
+def normalize_campaign_name(value: object) -> str:
+    """移除页面省略号或横线占位名，不猜测真实活动名称。"""
+    text = _optional_text(value) or ""
+    return "" if _CAMPAIGN_NAME_PLACEHOLDER_RE.fullmatch(text) else text
 
 
 def _optional_text(value: object) -> str | None:

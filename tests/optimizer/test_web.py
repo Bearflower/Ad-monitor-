@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import http.client
+import json
 import threading
 from dataclasses import replace
 from datetime import UTC, date, datetime
@@ -529,6 +530,30 @@ def test_campaigns_empty_state_does_not_invent_campaign(web_server) -> None:
     assert "/campaigns/campaign-1" not in page
 
 
+def test_campaigns_page_replaces_placeholder_name_with_stable_id_fallback(
+    repository: OptimizerRepository, web_server
+) -> None:
+    repository.save_snapshot(
+        CampaignSnapshot(
+            "store-1",
+            "placeholder-name",
+            "...",
+            "product",
+            CampaignStatus.ENDED,
+            Decimal(500),
+            Decimal("5.5"),
+            "THB",
+            datetime(2026, 9, 10, 3, tzinfo=UTC),
+            date(2026, 9, 9),
+        )
+    )
+
+    _, _, page = _request(web_server, "GET", "/campaigns")
+
+    assert "未获取活动名称（placeholder-name）" in page
+    assert "<h3>...</h3>" not in page
+
+
 @pytest.mark.parametrize(
     ("status", "actual_value"),
     [(FeedbackStatus.EXECUTED.value, ""), (FeedbackStatus.MODIFIED.value, "108")],
@@ -568,7 +593,8 @@ def test_feedback_saves_exact_revision_and_rejects_replay(
     assert "质量评估时间：2026-09-10T00:00:00+00:00" in page
     assert "质量说明：需补充目标" in page
     assert "缺失：target_roas" in page
-    assert "规则输入：floor=2.5" in page
+    assert "技术审计详情" in page
+    assert "floor" in page and "2.5" in page
     assert "成功观察：3 天" in page
     nonce = page.split('name="csrf_nonce" value="', 1)[1].split('"', 1)[0]
     form = urlencode({
@@ -584,6 +610,68 @@ def test_feedback_saves_exact_revision_and_rejects_replay(
     assert saved[0].recommendation_revision == recommendation.revision
     assert saved[0].actual_value == (Decimal(108) if actual_value else None)
     assert _request(web_server, "POST", path, body=form, headers={"Content-Type": "application/x-www-form-urlencoded"})[0] == 409
+
+
+def test_evidence_renders_readable_summary_and_decoded_collapsed_audit(
+    repository: OptimizerRepository, web_server
+) -> None:
+    recommendation = _recommendation()
+    rule_inputs = (
+        (
+            "policy_template",
+            json.dumps(
+                {
+                    "short_window_days": 7,
+                    "long_window_days": 30,
+                    "min_history_days": 3,
+                    "min_orders": 3,
+                    "default_budget_step": "0.1",
+                    "global_max_budget_step": "0.2",
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+            ),
+        ),
+        (
+            "profile",
+            json.dumps(
+                {"minimum_roas": "5.5", "note": "由首次快照自动初始化"},
+                sort_keys=True,
+                separators=(",", ":"),
+            ),
+        ),
+        (
+            "snapshot",
+            json.dumps(
+                {
+                    "current_budget": "5E+2",
+                    "currency": "THB",
+                    "target_roas": "5.5",
+                    "status": "ended",
+                    "campaign_name": "<script>危险</script>",
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+            ),
+        ),
+    )
+    evidence = replace(recommendation.evidence[0], rule_inputs=rule_inputs)
+    repository.save_recommendation(replace(recommendation, evidence=(evidence,)))
+    _make_today_visible(repository)
+
+    _, _, page = _request(web_server, "GET", "/")
+
+    assert "短窗 7 天、长窗 30 天" in page
+    assert "最低样本 3 天 / 3 单" in page
+    assert "预算调整 10%（最多 20%）" in page
+    assert "最低 ROAS 5.5" in page
+    assert "当前预算 500 THB" in page
+    assert "目标 ROAS 5.5" in page
+    assert "活动状态 ended" in page
+    assert "\\u7531" not in page
+    assert "由首次快照自动初始化" in page
+    assert "<details><summary>技术审计详情</summary>" in page
+    assert "&lt;script&gt;危险&lt;/script&gt;" in page
 
 
 @pytest.mark.parametrize("status", ["deferred", "rejected"])

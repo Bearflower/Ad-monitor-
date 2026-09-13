@@ -230,7 +230,7 @@ def _ranking_lines(metrics: tuple[AdMetric, ...]) -> list[str]:
     )
     for rank, item in enumerate(ranked, start=1):
         lines.append(
-            f"| {rank} | {_safe(item.campaign_name)} ({_safe(item.campaign_id)}) | "
+            f"| {rank} | {_safe(_campaign_label(item.campaign_name, item.campaign_id))} | "
             f"{_money(item.spend)} {item.currency} | {_money(item.gmv)} {item.currency} | "
             f"{_roas(item.roas)} | {item.orders} |"
         )
@@ -253,7 +253,7 @@ def _recommendation_lines(
     )
     lines: list[str] = []
     for item in ordered:
-        name = names.get(item.campaign_id, item.campaign_id)
+        name = names.get(item.campaign_id, "")
         currency = currencies.get(item.campaign_id, "")
         lines.extend(_recommendation_detail_lines(item, name, currency))
     return lines
@@ -272,7 +272,7 @@ def _recommendation_detail_lines(
 ) -> tuple[str, ...]:
     """参数动作与结构动作共用同一份可追溯明细。"""
     return (
-        f"### {_safe(campaign_name)} ({_safe(item.campaign_id)})",
+        f"### {_safe(_campaign_label(campaign_name, item.campaign_id))}",
         "",
         f"- 动作：{_ACTION_LABELS[item.action]} (`{item.action.value}`)，请人工修改",
         (
@@ -331,7 +331,10 @@ def _anomaly_lines(report: ShopeeAdsReport, current: bool) -> list[str]:
             )
     for item in report.metrics:
         if item.spend == 0:
-            anomalies.append(f"活动 {_safe(item.campaign_name)} 零花费，ROAS 未定义。")
+            anomalies.append(
+                f"活动 {_safe(_campaign_label(item.campaign_name, item.campaign_id))} "
+                "零花费，ROAS 未定义。"
+            )
     for recommendation in report.recommendations if current else ():
         for evidence in recommendation.evidence:
             quality = evidence.quality
@@ -392,6 +395,13 @@ def _safe(value: str) -> str:
 def _datetime(value: datetime) -> str:
     zone_name = getattr(value.tzinfo, "key", None) or value.tzname() or "UTC"
     return f"{value.strftime('%Y-%m-%d %H:%M:%S')} {zone_name}"
+
+
+def _campaign_label(name: str, campaign_id: str) -> str:
+    cleaned = name.strip()
+    if not cleaned or all(character in ".。…·-—–_" for character in cleaned):
+        return f"未获取活动名称（{campaign_id}）"
+    return f"{cleaned} ({campaign_id})"
 
 
 def _date(value: date | None) -> str:

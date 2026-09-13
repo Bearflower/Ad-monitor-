@@ -702,6 +702,35 @@ def test_parser_uses_product_stable_fallback_not_display_name_when_page_has_no_c
     assert page.campaigns[0].status is CampaignStatus.ACTIVE
 
 
+@pytest.mark.parametrize("name", ["", "   ", "...", "…", "—", "-"])
+def test_parser_marks_placeholder_campaign_names_as_missing(name):
+    fixture = json.loads(SYNTHETIC_CONTRACT_PATH.read_text(encoding="utf-8"))
+    fixture["campaign_rows"][0]["campaign_name"] = name
+    fixture["campaign_rows"][0]["name"] = name
+    fixture["missing_fields"] = []
+
+    page = parse_shopee_ads_page(
+        fixture, data_date=date(2026, 9, 9), store_id="store-1"
+    )
+
+    assert page.campaigns[0].campaign_name == ""
+    assert "campaign_name" in page.missing_fields
+
+
+def test_parser_preserves_a_real_campaign_name():
+    fixture = json.loads(SYNTHETIC_CONTRACT_PATH.read_text(encoding="utf-8"))
+    fixture["campaign_rows"][0]["campaign_name"] = "แคมเปญจริง"
+    fixture["campaign_rows"][0]["name"] = "แคมเปญจริง"
+    fixture["missing_fields"] = []
+
+    page = parse_shopee_ads_page(
+        fixture, data_date=date(2026, 9, 9), store_id="store-1"
+    )
+
+    assert page.campaigns[0].campaign_name == "แคมเปญจริง"
+    assert "campaign_name" not in page.missing_fields
+
+
 def test_parser_treats_python_none_page_ids_as_missing_and_uses_item_fallback():
     contract = json.loads(SYNTHETIC_CONTRACT_PATH.read_text(encoding="utf-8"))
     contract["campaign_rows"] = [

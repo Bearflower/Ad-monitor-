@@ -5,11 +5,12 @@ from __future__ import annotations
 import base64
 import hashlib
 import html
+import json
 import secrets
 import sqlite3
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -501,14 +502,97 @@ def _recommendation_card(item: Recommendation, nonces: _NonceStore) -> str:
 def _evidence_detail(evidence: Evidence) -> str:
     summary = html.escape(evidence.summary)
     missing = ", ".join(html.escape(value) for value in evidence.quality.missing_fields)
-    rule_inputs = ", ".join(
-        f"{html.escape(key)}={html.escape(value)}" for key, value in evidence.rule_inputs
+    rule_summary = html.escape(_rule_input_summary(evidence.rule_inputs))
+    audit_items = "".join(
+        f"<dt>{html.escape(key)}</dt><dd><code>{html.escape(_decoded_rule_input(value)[1])}</code></dd>"
+        for key, value in evidence.rule_inputs
+    )
+    audit = (
+        f"<details><summary>技术审计详情</summary><dl>{audit_items}</dl></details>"
+        if audit_items
+        else ""
     )
     quality_note = html.escape(evidence.quality.note) or "无"
     return f"""<section class="evidence"><p>{summary}</p>
 <p>短窗：{evidence.short_window.start_date.isoformat()} 至 {evidence.short_window.end_date.isoformat()}；长窗：{evidence.long_window.start_date.isoformat()} 至 {evidence.long_window.end_date.isoformat()}</p>
 <p>质量：{evidence.quality.status.value}；质量评估时间：{evidence.quality.assessed_at.isoformat()}；质量说明：{quality_note}</p>
-<p>缺失：{missing or '无'}；规则输入：{rule_inputs or '无'}</p></section>"""
+<p>缺失：{missing or '无'}</p><p>策略摘要：{rule_summary}</p>{audit}</section>"""
+
+
+def _rule_input_summary(rule_inputs: tuple[tuple[str, str], ...]) -> str:
+    values = {key: _decoded_rule_input(value)[0] for key, value in rule_inputs}
+    template = _mapping(values.get("policy_template"))
+    profile = _mapping(values.get("profile"))
+    snapshot = _mapping(values.get("snapshot"))
+    parts: list[str] = []
+    short_days = _integer_text(template.get("short_window_days"))
+    long_days = _integer_text(template.get("long_window_days"))
+    if short_days and long_days:
+        parts.append(f"短窗 {short_days} 天、长窗 {long_days} 天")
+    history_days = _integer_text(template.get("min_history_days"))
+    min_orders = _integer_text(template.get("min_orders"))
+    if history_days and min_orders:
+        parts.append(f"最低样本 {history_days} 天 / {min_orders} 单")
+    budget_step = _percent_text(template.get("default_budget_step"))
+    max_budget_step = _percent_text(template.get("global_max_budget_step"))
+    if budget_step and max_budget_step:
+        parts.append(f"预算调整 {budget_step}（最多 {max_budget_step}）")
+    minimum_roas = _number_text(profile.get("minimum_roas"))
+    if minimum_roas:
+        parts.append(f"最低 ROAS {minimum_roas}")
+    current_budget = _number_text(snapshot.get("current_budget"))
+    if current_budget:
+        currency = str(snapshot.get("currency") or "").strip()
+        parts.append(f"当前预算 {current_budget}" + (f" {currency}" if currency else ""))
+    target_roas = _number_text(snapshot.get("target_roas"))
+    if target_roas:
+        parts.append(f"目标 ROAS {target_roas}")
+    status = str(snapshot.get("status") or "").strip()
+    if status:
+        parts.append(f"活动状态 {status}")
+    return "；".join(parts) or "无可读摘要"
+
+
+def _decoded_rule_input(value: str) -> tuple[object | None, str]:
+    try:
+        parsed = json.loads(value)
+    except (json.JSONDecodeError, TypeError):
+        return None, value
+    return parsed, json.dumps(
+        parsed, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    )
+
+
+def _mapping(value: object) -> Mapping[str, object]:
+    return value if isinstance(value, Mapping) else {}
+
+
+def _integer_text(value: object) -> str | None:
+    if isinstance(value, bool):
+        return None
+    try:
+        parsed = int(str(value))
+    except (TypeError, ValueError):
+        return None
+    return str(parsed) if parsed >= 0 else None
+
+
+def _number_text(value: object) -> str | None:
+    try:
+        parsed = Decimal(str(value))
+    except (InvalidOperation, TypeError, ValueError):
+        return None
+    if not parsed.is_finite():
+        return None
+    rendered = format(parsed, "f")
+    return rendered.rstrip("0").rstrip(".") if "." in rendered else rendered
+
+
+def _percent_text(value: object) -> str | None:
+    parsed = _number_text(value)
+    if parsed is None:
+        return None
+    return f"{_number_text(Decimal(parsed) * 100)}%"
 
 
 def _campaigns_content(
@@ -536,6 +620,12 @@ def _campaigns_content(
 def _campaign_card(campaign: CampaignReadModel, nonces: _NonceStore) -> str:
     snapshot = campaign.snapshot
     metric = campaign.metric
+    campaign_name = (
+        snapshot.campaign_name
+        if snapshot is not None
+        else metric.campaign_name if metric is not None else ""
+    )
+    heading = html.escape(_campaign_label(campaign_name, campaign.campaign_id))
     control = (
         "<p>暂无控制面快照。</p>"
         if snapshot is None
@@ -566,8 +656,15 @@ def _campaign_card(campaign: CampaignReadModel, nonces: _NonceStore) -> str:
             nonces.issue(f"profile:{campaign.campaign_id}"),
         )
     )
-    return f"""<article><h3>{html.escape(campaign.campaign_id)}</h3>
+    return f"""<article><h3>{heading}</h3>
 {control}{performance}<h4>策略版本历史</h4><ol>{history}</ol>{form}</article>"""
+
+
+def _campaign_label(name: str, campaign_id: str) -> str:
+    cleaned = name.strip()
+    if not cleaned or all(character in ".。…·-—–_" for character in cleaned):
+        return f"未获取活动名称（{campaign_id}）"
+    return f"{cleaned}（{campaign_id}）"
 
 
 def _reviews_content(

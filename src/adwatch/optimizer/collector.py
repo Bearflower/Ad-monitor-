@@ -24,6 +24,7 @@ from adwatch.optimizer.repository import OptimizerRepository
 from adwatch.optimizer.ziniao import (
     PageTimeoutError,
     ZiniaoCliClient,
+    normalize_campaign_name,
     parse_shopee_ads_page,
     validate_shopee_ads_page_url,
 )
@@ -399,7 +400,9 @@ class ShopeeAdCollector:
                     row,
                     store_id,
                     campaign_id,
-                    _text(row.get("campaign_name")) or _text(row.get("name")) or "",
+                    normalize_campaign_name(
+                        _text(row.get("campaign_name")) or _text(row.get("name"))
+                    ),
                     "__ALL__",
                     MetricGrain.CAMPAIGN,
                     data_date,
@@ -430,7 +433,9 @@ class ShopeeAdCollector:
                     row,
                     store_id,
                     campaign_id,
-                    _text(row.get("campaign_name")) or _text(row.get("name")) or "",
+                    normalize_campaign_name(
+                        _text(row.get("campaign_name")) or _text(row.get("name"))
+                    ),
                     item_id,
                     MetricGrain.ITEM,
                     data_date,
