@@ -2,8 +2,7 @@ version: "3.8"
 
 services:
   adwatch:
-    build: .
-    image: adwatch:latest
+    image: ghcr.io/bearflower/trading-adwatch:latest
     container_name: adwatch
     env_file:
       - .env
