@@ -22,7 +22,7 @@ com.adwatch.daily
 3. `ADWATCH_DAILY_RUN_TIME=09:00`。
 4. `.env` 已配置 `ZINIAO_SHOPEE_STORE_ID`。
 5. 紫鸟客户端已登录，`ziniao-cli store list` 能看到对应 Shopee 店铺。
-6. `.venv/bin/adwatch doctor` 的五项检查全部通过。
+6. `.venv/bin/adwatch doctor` 的六项检查全部通过，其中 `shopee_page` 会执行只读页面探针。
 
 调度会设置确定性 PATH，不继承登录 shell 的 PATH：
 

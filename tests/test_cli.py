@@ -167,6 +167,34 @@ def test_doctor_runtime_can_be_built_when_store_configuration_is_missing(
     assert checks["shopee_store"] is False
 
 
+def test_doctor_detects_broken_page_channel(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    settings = Settings(data_dir=tmp_path, ziniao_shopee_store_id="store-1")
+    runtime = adwatch.cli._build_optimizer_runtime(settings)
+    monkeypatch.setattr(adwatch.cli.shutil, "which", lambda _: "/bin/ziniao-cli")
+    monkeypatch.setattr(runtime.client, "store_list", lambda: [
+        {"storeId": "store-1", "platformName": "Shopee"}
+    ])
+    monkeypatch.setattr(runtime.client, "page_exec", lambda *_: (_ for _ in ()).throw(
+        adwatch.cli.ZiniaoCliError("page channel failed")
+    ))
+
+    checks = dict(runtime.doctor(8765))
+    assert checks["shopee_store"] is True
+    assert checks["shopee_page"] is False
+
+
+def test_doctor_accepts_readable_page_channel(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    settings = Settings(data_dir=tmp_path, ziniao_shopee_store_id="store-1")
+    runtime = adwatch.cli._build_optimizer_runtime(settings)
+    monkeypatch.setattr(adwatch.cli.shutil, "which", lambda _: "/bin/ziniao-cli")
+    monkeypatch.setattr(runtime.client, "store_list", lambda: [
+        {"storeId": "store-1", "platformName": "Shopee"}
+    ])
+    monkeypatch.setattr(runtime.client, "page_exec", lambda *_: {"url": "about:blank"})
+
+    assert dict(runtime.doctor(8765))["shopee_page"] is True
+
+
 def test_doctor_converts_database_errors_to_failed_check(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

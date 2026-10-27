@@ -508,6 +508,13 @@ class ZiniaoCliClient:
         error_code = (
             str(error.get("code", "")).lower() if isinstance(error, dict) else ""
         )
+        if (
+            (operation == "session_status" or operation.startswith("page_"))
+            and error_type == "zclaw"
+            and isinstance(error, dict)
+            and str(error.get("message", "")).strip() == "ZClaw 工具调用失败 [-1]:"
+        ):
+            raise BridgeUnavailableError("ZClaw 页面会话通道不可用") from None
         if error_type in {"network", "bridge"} or error_code in {
             "network",
             "bridge_unavailable",

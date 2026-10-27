@@ -69,7 +69,7 @@ ADWATCH_DAILY_RUN_TIME=09:00
 .venv/bin/adwatch schedule install
 .venv/bin/adwatch schedule uninstall
 
-# 检查 Python、SQLite、ziniao-cli、Shopee 店铺和本机端口
+# 检查 Python、SQLite、ziniao-cli、Shopee 店铺、页面通道和本机端口
 .venv/bin/adwatch doctor
 ```
 

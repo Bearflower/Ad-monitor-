@@ -548,6 +548,45 @@ def test_client_maps_page_timeout_to_bridge_error_for_store_operations(
         )
 
 
+def test_session_status_maps_bare_zclaw_minus_one_to_retryable_bridge_error():
+    response = CommandResult(
+        json.dumps(
+            {
+                "ok": False,
+                "error": {
+                    "type": "zclaw",
+                    "message": "ZClaw 工具调用失败 [-1]: ",
+                },
+            }
+        ),
+        returncode=5,
+    )
+
+    with pytest.raises(BridgeUnavailableError) as error:
+        ZiniaoCliClient(runner=FakeRunner([response])).page_exec(
+            "store-1", "session_status"
+        )
+
+    assert error.value.__cause__ is None
+    assert "[-1]" not in str(error.value)
+
+
+@pytest.mark.parametrize("operation", ["read", "visit"])
+def test_page_operation_maps_bare_zclaw_minus_one_to_bridge_error(operation):
+    response = CommandResult(
+        json.dumps({"ok": False, "error": {
+            "type": "zclaw", "message": "ZClaw 工具调用失败 [-1]: "
+        }}),
+        returncode=5,
+    )
+    client = ZiniaoCliClient(runner=FakeRunner([response]))
+    with pytest.raises(BridgeUnavailableError):
+        if operation == "read":
+            client.page_exec("store-1", "shopee_ads_contract")
+        else:
+            client.visit_shopee_ads("store-1", date(2026, 9, 9))
+
+
 @pytest.mark.parametrize("operation", ["store_list", "page_exec"])
 def test_client_hides_subprocess_os_error_details(operation):
     error = FileNotFoundError("ziniao-cli: no such file or directory")

@@ -152,11 +152,13 @@ class _OptimizerRuntime:
         database = self._database_healthy()
         cli = shutil.which("ziniao-cli") is not None
         store = self._store_healthy() if cli else False
+        page = self._page_healthy() if store else False
         return (
             ("runtime", runtime),
             ("database", database),
             ("ziniao_cli", cli),
             ("shopee_store", store),
+            ("shopee_page", page),
             ("local_port", _local_port_available(port)),
         )
 
@@ -180,6 +182,16 @@ class _OptimizerRuntime:
             and "shopee" in str(item.get("platformName", "")).lower()
             for item in stores
         )
+
+
+    def _page_healthy(self) -> bool:
+        try:
+            page = self.client.page_exec(
+                self.settings.ziniao_shopee_store_id, "session_status"
+            )
+        except ZiniaoCliError:
+            return False
+        return isinstance(page, dict) and isinstance(page.get("url"), str) and bool(page["url"])
 
 
 class _WorkflowStages:
